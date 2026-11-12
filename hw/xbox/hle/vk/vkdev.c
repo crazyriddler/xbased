@@ -283,8 +283,16 @@ int hle_vk_init(void)
         iexts[nix++] = NC_SURFACE_EXT;
     }
 #endif
+    VkInstanceCreateFlags iflags = 0;
+#ifdef __APPLE__
+    if (has_ext(iext, nie, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+        iexts[nix++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+        iflags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    }
+#endif
     VkInstanceCreateInfo ici = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .flags = iflags,
         .pApplicationInfo = &app,
         .enabledExtensionCount = nix, .ppEnabledExtensionNames = iexts,
     };
@@ -812,6 +820,11 @@ int hle_vk_init(void)
     if (c->share) {
         exts[nx++] = VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME;
         exts[nx++] = VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME;
+    }
+#endif
+#ifdef __APPLE__
+    if (has_ext(ext, ne, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME)) {
+        exts[nx++] = VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
     }
 #endif
     float prio = 1.0f;

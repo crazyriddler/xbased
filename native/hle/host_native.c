@@ -203,7 +203,18 @@ void *hle_host_vk_loader(void)
         return (void *)g_custom_gipa;
     }
     if (!gipa) {
+#ifdef __APPLE__
+        const char *path = nc_vk_library_path();
+        if (!path) {
+            nc_log("hakuX-native-hle", "no Vulkan library: no libMoltenVK.dylib in the app's Frameworks, "
+                                       "nor the Vulkan SDK's in /usr/local/lib");
+            return NULL;
+        }
+        nc_log("hakuX-native-hle", "Vulkan: %s", path);
+        void *lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+#else
         void *lib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+#endif
         gipa = lib ? (PFN_vkGetInstanceProcAddr)dlsym(lib, "vkGetInstanceProcAddr") : NULL;
         if (!gipa) {
             nc_log("hakuX-native-hle", "no Vulkan loader: %s", dlerror());
