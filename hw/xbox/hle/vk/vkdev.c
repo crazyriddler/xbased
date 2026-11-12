@@ -542,6 +542,9 @@ int hle_vk_init(void)
     c->bindless = ok_rda && ok_pb && ok_uab && ok_nui &&
                   l_img >= 3 * HLE_MAX_IMAGES && l_set_img >= 3 * HLE_MAX_IMAGES &&
                   l_smp >= HLE_MAX_SAMPLERS && l_set_smp >= HLE_MAX_SAMPLERS;
+    if (v13 && p12.driverID == VK_DRIVER_ID_MOLTENVK) {
+        c->bindless = false;
+    }
     need(c, v->props.limits.maxBoundDescriptorSets >= 4, "4 descriptor sets");
     if (v13) {                          /* both required of a 1.3 driver */
         need(c, q13.synchronization2, "synchronization2");
