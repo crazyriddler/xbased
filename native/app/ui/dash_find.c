@@ -387,7 +387,7 @@ static void osk(float x, float y, float ks, const In *in)
                 F.kx = col;
             }
             const bool sel = F.ky == r && (r < 4 ? F.kx == c : wide_of(F.kx) == c);
-            ui_round(kx, ky, kw, ks, 8, sel ? ui_alpha(UI_GREEN, 0.9f) : (UiColor){0x12, 0x2C, 0x0A, 0xF0});
+            ui_round(kx, ky, kw, ks, 8, sel ? ui_alpha(UI_GREEN, 0.9f) : ui_th(0x12, 0x2C, 0x0A, 0xF0));
             ui_round_outline(kx, ky, kw, ks, 8, sel ? 2 : 1, sel ? UI_GREEN_HI : UI_GREEN_DIM);
             char label[64];
             if (r < 4) {

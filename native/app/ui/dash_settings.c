@@ -5,6 +5,7 @@
  */
 #include "native/app/ui/console_cfg.h"
 #include "native/app/ui/dash_int.h"
+#include "native/app/ui/skin.h"
 #include "native/app/ui/cheat_text.h"
 #include "native/app/ui/input_map.h"
 #include "native/app/mod_fit.h"
@@ -132,7 +133,7 @@ static void tab_bar(const enum UiStr *tabs, int n)
             D.tab = i;
             D.sel[dash_top()] = 0;
         }
-        ui_round(x, 124, w, 44, 22, s ? (UiColor){0x3C, 0x9A, 0x12, 0xFF} : (UiColor){0x10, 0x2C, 0x07, 0xE0});
+        ui_round(x, 124, w, 44, 22, s ? ui_th(0x3C, 0x9A, 0x12, 0xFF) : ui_th(0x10, 0x2C, 0x07, 0xE0));
         ui_round_outline(x, 124, w, 44, 22, s ? 2 : 1, s ? UI_GREEN_HI : UI_GREEN_DIM);
         ui_text(x + w / 2, 132, t, 24, UI_FONT_BOLD, s ? UI_WHITE : UI_GREY, UI_ALIGN_CENTER);
         x += w + 12;
@@ -279,7 +280,24 @@ void scr_settings(void)
         if (now && strcmp(now, was)) {
             i18n_set(now);
         }
+        {
+            /* the skins: a colour theme and a dashboard style */
+            static const char *tv[UI_THEME_COUNT];
+            const char *tn[UI_THEME_COUNT] = {T(S_THEME_GREEN), T(S_THEME_NEON), T(S_THEME_RED)};
+            for (int i = 0; i < UI_THEME_COUNT; i++) {
+                tv[i] = ui_theme_name(i);
+            }
+            opt_choice(&l, S_THEME, "ui.theme", tv, tn, UI_THEME_COUNT, "green");
+            static const char *sv[SK_COUNT];
+            static const char *sn[SK_COUNT];
+            for (int i = 0; i < SK_COUNT; i++) {
+                sv[i] = skin_name(i);
+                sn[i] = skin_title(i);
+            }
+            opt_choice(&l, S_DASH_STYLE, "ui.style", sv, sn, SK_COUNT, "orb");
+        }
         opt_bool(&l, S_COVERS_ONLINE, "covers", true, false);
+        opt_bool(&l, S_FLOAT_COVERS, "ui.float", true, false);
         opt_bool(&l, S_ANIMATED_BG, "ui.anim", true, false);
         opt_bool(&l, S_TRANSITIONS, "ui.fx", true, false);
         opt_bool(&l, S_UI_SOUNDS, "ui.sounds", true, false);

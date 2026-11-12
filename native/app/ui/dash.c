@@ -7,6 +7,7 @@
 #include "native/app/ui/console_cfg.h"
 #include "native/app/ui/dash_int.h"
 #include "native/app/ui/shortcut.h"
+#include "native/app/ui/skin.h"
 #include "native/app/ui/sound.h"
 #include "native/app/ui/update.h"
 
@@ -182,7 +183,7 @@ static void draw_toast(void)
         widest = w > widest ? w : widest;
     }
     const float tw = widest + 40, th = 14 + 30.0f * (float)nl, y = ui_h() - 76 - th;
-    ui_round((W - tw) / 2, y, tw, th, 22, (UiColor){0x10, 0x30, 0x08, 0xF0});
+    ui_round((W - tw) / 2, y, tw, th, 22, ui_th(0x10, 0x30, 0x08, 0xF0));
     ui_round_outline((W - tw) / 2, y, tw, th, 22, 1.5f, UI_GREEN);
     for (int i = 0; i < nl; i++) {
         ui_text(W / 2, y + 10 + 30.0f * (float)i, lines[i], 22, UI_FONT_REGULAR, UI_WHITE, UI_ALIGN_CENTER);
@@ -197,7 +198,7 @@ static void draw_scan_badge(void)
     char t[96];
     snprintf(t, sizeof(t), T(S_LOADING_GAMES), lib_count());
     const float tw = ui_text_width(t, 18, UI_FONT_REGULAR), w = tw + 58, x = W - 60 - w;
-    ui_round(x, y, w, h, h / 2, (UiColor){0x10, 0x30, 0x08, 0xE0});
+    ui_round(x, y, w, h, h / 2, ui_th(0x10, 0x30, 0x08, 0xE0));
     ui_round_outline(x, y, w, h, h / 2, 1, UI_GREEN_DIM);
     /* an orbit turning, as the menu's orb's: it's working */
     ui_ring(x + 19, y + h / 2, 9, 3.5f, (float)ui_time() * 4.0f, 2, UI_GREEN_HI);
@@ -668,7 +669,7 @@ void draw_button_glyph(float x, float y, int which, float size)
     if (D.in.pad && which >= 4) {
         /* the triggers, the View button: their names on a dark key */
         const float w = ui_text_width(k_pad_wide[which], size * 0.56f, UI_FONT_BOLD) + size * 0.7f;
-        ui_round(x, y + size * 0.08f, w, size * 0.84f, size * 0.42f, ui_alpha((UiColor){0x30, 0x34, 0x30, 0xFF}, 0.95f));
+        ui_round(x, y + size * 0.08f, w, size * 0.84f, size * 0.42f, ui_alpha(ui_th(0x30, 0x34, 0x30, 0xFF), 0.95f));
         ui_text(x + w / 2, y + size * 0.19f, k_pad_wide[which], size * 0.56f, UI_FONT_BOLD, UI_WHITE, UI_ALIGN_CENTER);
     } else if (D.in.pad) {
         ui_circle(x + size / 2, y + size / 2, size / 2, k_col[which]);
@@ -1460,65 +1461,43 @@ static void wait_child(void)
 
 /* ------------------------------------------------------------ main */
 
-static const char *k_main_items[] = {NULL, NULL, NULL, NULL, NULL};
-
 /* Exit, confirmed: the app closes (from a gamepad too, full screen) */
 static void exit_yes(Dash *d)
 {
     d->quit = true;
 }
 
+/* The colour theme and dashboard style from the settings (each frame, so a change shows at once). */
+void dash_apply_skin(void)
+{
+    ui_theme_set(ui_theme_from_name(cfg_get(&D.global, "ui.theme")));
+    skin_set(cfg_get(&D.global, "ui.style"));
+}
+
 static void scr_main(void)
 {
     const float W = ui_w(), H = ui_h();
-    const enum UiStr items[] = {S_GAMES, S_MEMORY, S_SETTINGS, S_ONLINE, S_EXIT};
-    const int n = 5;
-    int *sel = &D.sel[SCR_MAIN];
-    (void)k_main_items;
-    /* a tall window: the orb on top, the menu under it */
-    const bool tall = W < H * 1.1f;
-    const float ox = tall ? W * 0.5f : W * 0.32f, oy = tall ? H * 0.27f : H * 0.5f;
-    const float orb_r = tall ? fminf(H * 0.11f, W * 0.18f) : H * 0.13f;
-    ui_orb(ox, oy, orb_r, 0);
-    /* the logo, over the orb */
-    ui_text(ox, oy - orb_r * 0.36f, "xbased", orb_r * 0.56f, UI_FONT_BOLD, UI_WHITE, UI_ALIGN_CENTER);
-    /* the items: green capsules fanned on the orb's right */
-    for (int i = 0; i < n; i++) {
-        const float t = ease(D.anim * 3 - i * 0.12f);
-        const float ang = (i - (n - 1) / 2.0f) * 0.32f;
-        const float bw = tall ? W * 0.7f : W * 0.30f, bh = 56;
-        const float bx = tall ? (W - bw) / 2 + (1 - t) * 60 : ox + orb_r * 1.5f + cosf(ang) * 40 - 30 + (1 - t) * 60;
-        const float by = tall ? oy + orb_r * 1.9f + i * (bh + 18) : oy + sinf(ang) * orb_r * 2.9f - 28;
-        const bool s = *sel == i;
-        const bool over = D.in.mx >= bx && D.in.mx < bx + bw && D.in.my >= by && D.in.my < by + bh;
-        if (over && D.in.moved) {
-            *sel = i;
-        }
-        if (!tall) {
-            ui_line(ox + orb_r * 0.9f * cosf(ang), oy + orb_r * 0.9f * sinf(ang), bx, by + bh / 2, s ? 3 : 1.5f,
-                    ui_alpha(UI_GREEN, (s ? 0.8f : 0.35f) * t));
-        }
-        if (s) {
-            ui_glow(bx + bw / 2, by + bh / 2, bw * 0.7f, ui_alpha(UI_GREEN, 0.25f * t));
-        }
-        ui_round(bx, by, bw, bh, bh / 2, ui_alpha(s ? (UiColor){0x3C, 0x9A, 0x12, 0xFF} : (UiColor){0x14, 0x3A, 0x08, 0xFF}, 0.92f * t));
-        ui_round_outline(bx, by, bw, bh, bh / 2, s ? 2.5f : 1.5f, ui_alpha(s ? UI_GREEN_HI : UI_GREEN_DIM, t));
-        ui_text(bx + 34, by + 11, T(items[i]), 32, UI_FONT_BOLD, ui_alpha(s ? UI_WHITE : UI_GREY, t), UI_ALIGN_LEFT);
-        if ((s && D.in.ok) || (over && D.in.click)) {
-            switch (items[i]) {
-            case S_GAMES: dash_push(SCR_GAMES); break;
-            case S_MEMORY: dash_push(SCR_MEMORY); break;
-            case S_SETTINGS: dash_push(SCR_SETTINGS); break;
-            case S_ONLINE: dash_push(SCR_ONLINE); break;
-            default: dash_ask(T(S_CONFIRM_EXIT), exit_yes); break;
-            }
-        }
+    static const struct { enum UiStr label, desc; } k_items[] = {
+        {S_GAMES, S_DESC_GAMES}, {S_MEMORY, S_DESC_MEMORY}, {S_ONLINE, S_DESC_ONLINE},
+        {S_SETTINGS, S_DESC_SETTINGS}, {S_EXIT, S_DESC_EXIT},
+    };
+    /* each item's colour and the Games tab's recents go by its id, not its place */
+    static const int k_ids[] = {0, 1, 4, 5, 6};
+    enum { N_ITEMS = 5 };
+    SkinItem items[N_ITEMS];
+    for (int i = 0; i < N_ITEMS; i++) {
+        items[i].id = k_ids[i];
+        items[i].label = T(k_items[i].label);
+        items[i].desc = T(k_items[i].desc);
     }
-    if (D.in.up) {
-        *sel = (*sel + n - 1) % n;
-    }
-    if (D.in.down) {
-        *sel = (*sel + 1) % n;
+    const int pick = skin_main(items, N_ITEMS, &D.sel[SCR_MAIN]);
+    switch (pick) {
+    case 0: dash_push(SCR_GAMES); break;
+    case 1: dash_push(SCR_MEMORY); break;
+    case 2: dash_push(SCR_ONLINE); break;
+    case 3: dash_push(SCR_SETTINGS); break;
+    case 4: dash_ask(T(S_CONFIRM_EXIT), exit_yes); break;
+    default: break;
     }
     if (D.in.y) {
         dash_push(SCR_ABOUT);
@@ -1539,14 +1518,14 @@ static void draw_card(LibGame *g, float x, float y, float w, float h, bool sel, 
     if (sel) {
         ui_glow(x + w / 2, y + h / 2, w * 1.1f, ui_alpha(UI_GREEN, 0.35f * alpha));
     }
-    ui_round(x, y, w, h, 10, ui_alpha((UiColor){0x0E, 0x26, 0x07, 0xFF}, alpha));
+    ui_round(x, y, w, h, 10, ui_alpha(ui_th(0x0E, 0x26, 0x07, 0xFF), alpha));
     UiTex *cv = lib_cover(g);
     if (cv) {
         ui_image(cv, x + 4, y + 4, w - 8, h - 8, alpha);
     } else {
         /* no box art: the disc's own icon on a green card, its title under */
-        ui_rect_grad(x + 4, y + 4, w - 8, h - 8, ui_alpha((UiColor){0x1E, 0x52, 0x0A, 0xFF}, alpha),
-                     ui_alpha((UiColor){0x06, 0x14, 0x03, 0xFF}, alpha));
+        ui_rect_grad(x + 4, y + 4, w - 8, h - 8, ui_alpha(ui_th(0x1E, 0x52, 0x0A, 0xFF), alpha),
+                     ui_alpha(ui_th(0x06, 0x14, 0x03, 0xFF), alpha));
         UiTex *ic = lib_icon(g);
         /* sized to the card: the small covers' view has them a third as big */
         const float fs = fminf(17, fmaxf(10, w * 0.13f)), is = fminf(w * 0.62f, h - fs * 4.2f);
@@ -1639,7 +1618,7 @@ static void draw_add_card(float x, float y, float w, float h, bool sel, float al
         if (sel) {
             ui_glow(x + w / 2, y + h / 2, w * 0.7f, ui_alpha(UI_GREEN, 0.3f * alpha));
         }
-        ui_round(x, y, w, h, 8, ui_alpha(sel ? (UiColor){0x1A, 0x44, 0x0C, 0xFF} : (UiColor){0x0E, 0x26, 0x07, 0xFF},
+        ui_round(x, y, w, h, 8, ui_alpha(sel ? ui_th(0x1A, 0x44, 0x0C, 0xFF) : ui_th(0x0E, 0x26, 0x07, 0xFF),
                                          alpha));
         const float is = h - 10, cx = x + 5 + is / 2, cy = y + h / 2, r = is * 0.36f;
         ui_ring(cx, cy, r, r, 0, 2.5f, fg);
@@ -1653,7 +1632,7 @@ static void draw_add_card(float x, float y, float w, float h, bool sel, float al
     if (sel) {
         ui_glow(x + w / 2, y + h / 2, w * 1.1f, ui_alpha(UI_GREEN, 0.35f * alpha));
     }
-    ui_round(x, y, w, h, 10, ui_alpha((UiColor){0x08, 0x16, 0x05, 0xE8}, alpha));
+    ui_round(x, y, w, h, 10, ui_alpha(ui_th(0x08, 0x16, 0x05, 0xE8), alpha));
     const float cx = x + w / 2, cy = y + h * 0.4f, r = w * 0.26f;
     ui_ring(cx, cy, r, r, 0, 3, ui_alpha(sel ? UI_GREEN_HI : UI_GREEN, alpha));
     ui_rect(cx - r * 0.5f, cy - 3, r, 6, ui_alpha(sel ? UI_GREEN_HI : UI_GREEN, alpha));
@@ -1666,7 +1645,7 @@ static void draw_add_card(float x, float y, float w, float h, bool sel, float al
 /* a favorite's star: five points on a dark disc, top right of a card */
 static void draw_star(float cx, float cy, float r, float alpha)
 {
-    ui_circle(cx, cy, r * 1.25f, ui_alpha((UiColor){0x08, 0x10, 0x04, 0xFF}, 0.85f * alpha));
+    ui_circle(cx, cy, r * 1.25f, ui_alpha(ui_th(0x08, 0x10, 0x04, 0xFF), 0.85f * alpha));
     SDL_FPoint p[10];
     for (int i = 0; i < 10; i++) {
         const float a = -1.5707963f + i * 0.6283185f, k = i % 2 ? r * 0.45f : r;
@@ -1743,13 +1722,13 @@ static void draw_tile(LibGame *g, float x, float y, float w, float h, bool sel, 
     if (sel) {
         ui_glow(x + w / 2, y + h / 2, w * 0.7f, ui_alpha(UI_GREEN, 0.3f * alpha));
     }
-    ui_round(x, y, w, h, 8, ui_alpha(sel ? (UiColor){0x1A, 0x44, 0x0C, 0xFF} : (UiColor){0x0E, 0x26, 0x07, 0xFF}, alpha));
+    ui_round(x, y, w, h, 8, ui_alpha(sel ? ui_th(0x1A, 0x44, 0x0C, 0xFF) : ui_th(0x0E, 0x26, 0x07, 0xFF), alpha));
     const float is = h - 10;
     UiTex *ic = lib_icon(g);
     if (ic) {
         ui_image(ic, x + 5, y + 5, is, is, alpha);
     } else {
-        ui_round(x + 5, y + 5, is, is, 6, ui_alpha((UiColor){0x1E, 0x52, 0x0A, 0xFF}, alpha));
+        ui_round(x + 5, y + 5, is, is, 6, ui_alpha(ui_th(0x1E, 0x52, 0x0A, 0xFF), alpha));
         ui_text(x + 5 + is / 2, y + 5 + is * 0.18f, "X", is * 0.6f, UI_FONT_BOLD, ui_alpha(UI_GREEN, alpha),
                 UI_ALIGN_CENTER);
     }
@@ -1789,6 +1768,11 @@ static void open_game(LibGame *g)
     }
     D.sel[SCR_GAME] = 0;
     dash_push(SCR_GAME);
+}
+
+void dash_open_game(LibGame *g)
+{
+    open_game(g);
 }
 
 #define MAX_SHOWN 16384
@@ -2021,7 +2005,7 @@ static void scr_games(void)
     if (s_jump[0] && ui_time() - s_jump_at < 0.9) {
         const float t = (float)(ui_time() - s_jump_at), al = t < 0.6f ? 1 : 1 - (t - 0.6f) / 0.3f;
         const float tw = ui_text_width(s_jump, 64, UI_FONT_BOLD), bw = fmaxf(tw + 60, 130), bh = 104;
-        ui_round((W - bw) / 2, (H - bh) / 2 - 20, bw, bh, 18, ui_alpha((UiColor){0x08, 0x1A, 0x04, 0xF0}, al));
+        ui_round((W - bw) / 2, (H - bh) / 2 - 20, bw, bh, 18, ui_alpha(ui_th(0x08, 0x1A, 0x04, 0xF0), al));
         ui_round_outline((W - bw) / 2, (H - bh) / 2 - 20, bw, bh, 18, 2, ui_alpha(UI_GREEN_HI, al));
         ui_text(W / 2, (H - bh) / 2 - 2, s_jump, 64, UI_FONT_BOLD, ui_alpha(UI_WHITE, al), UI_ALIGN_CENTER);
     }
@@ -2275,7 +2259,7 @@ static void draw_ask(void)
     const float extra = (nq > 1 ? nq - 1 : 0) * (fs + 8);
     const float h = 230 + extra, x = (W - w) / 2, y = (H - h) / 2;
     ui_glow(W / 2, H / 2, w * 0.8f, ui_alpha(UI_GREEN, 0.18f));
-    ui_round(x, y, w, h, 18, (UiColor){0x0A, 0x1C, 0x06, 0xF4});
+    ui_round(x, y, w, h, 18, ui_th(0x0A, 0x1C, 0x06, 0xF4));
     ui_round_outline(x, y, w, h, 18, 2, UI_GREEN);
     for (int i = 0; i < nq; i++) {
         ui_text_fit(W / 2, y + 50 + i * (fs + 8), qlines[i], fs, UI_FONT_BOLD, UI_WHITE, UI_ALIGN_CENTER, w - 40);
@@ -2304,7 +2288,7 @@ static void draw_ask(void)
             sel = i;
         }
         const bool s = i == sel;
-        ui_round(bx, by, bw, bh, 28, s ? (UiColor){0x3C, 0x9A, 0x12, 0xFF} : (UiColor){0x14, 0x3A, 0x08, 0xFF});
+        ui_round(bx, by, bw, bh, 28, s ? ui_th(0x3C, 0x9A, 0x12, 0xFF) : ui_th(0x14, 0x3A, 0x08, 0xFF));
         ui_round_outline(bx, by, bw, bh, 28, 2, s ? UI_GREEN_HI : UI_GREEN_DIM);
         ui_text_fit(bx + bw / 2, by + 14, opts[i], n == 3 ? 22 : 28, UI_FONT_BOLD, UI_WHITE, UI_ALIGN_CENTER,
                     bw - 16);
@@ -2520,10 +2504,11 @@ int dash_run(SDL_Window *win, const char *exe)
         const int sp_before = D.sp;
         const enum Screen top_before = dash_top();
         ui_begin();
+        dash_apply_skin();
         if (go_pic || go_back) {
             g_go.pic = ui_layer_begin(g_go.pic);
         }
-        ui_backdrop(cfg_bool(&D.global, "ui.anim", true) ? 1.0f : 0.0f);
+        skin_backdrop(cfg_bool(&D.global, "ui.anim", true) ? 1.0f : 0.0f);
         /* the screen's foreground in a layer: the transitions turn it in 3D */
         g_layer = ui_layer_begin(g_layer);
         lib_show_hidden(true);     /* the Games screen leaves hidden games out while it draws */
@@ -2842,6 +2827,7 @@ int dash_ingame(SDL_Window *win, const char *key, const char *title, const char 
             }
         }
         ui_begin();
+        dash_apply_skin();
         /* the paused game under a green veil: blurred, over the overlay */
         if (ov) {
             ui_cover(true);
@@ -2851,7 +2837,7 @@ int dash_ingame(SDL_Window *win, const char *key, const char *title, const char 
         } else if (frame) {
             ui_fill(frame, UI_WHITE);
         }
-        ui_rect_grad(0, 0, ui_w(), ui_h(), (UiColor){0, 12, 0, ov ? 150 : 200}, (UiColor){0, 24, 0, ov ? 190 : 225});
+        ui_rect_grad(0, 0, ui_w(), ui_h(), ui_th(0, 12, 0, ov ? 150 : 200), ui_th(0, 24, 0, ov ? 190 : 225));
         ui_glow(ui_w() / 2, ui_h() / 2, ui_h() * 0.8f, ui_alpha(UI_GREEN, 0.10f));
         switch (dash_top()) {
         case SCR_INGAME: scr_ingame(); break;

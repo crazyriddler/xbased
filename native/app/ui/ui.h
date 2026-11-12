@@ -16,15 +16,37 @@ typedef struct { uint8_t r, g, b, a; } UiColor;
 /* A texture of the interface's (the renderer's, or the overlay's). */
 typedef struct UiTex UiTex;
 
-/* The theme: the original Xbox dashboard's greens on black. */
-#define UI_GREEN      ((UiColor){0x8C, 0xF0, 0x2A, 0xFF})
-#define UI_GREEN_HI   ((UiColor){0xD8, 0xFF, 0x7A, 0xFF})
-#define UI_GREEN_DIM  ((UiColor){0x3E, 0x7A, 0x12, 0xFF})
-#define UI_GREEN_DARK ((UiColor){0x0C, 0x24, 0x06, 0xFF})
-#define UI_PANEL      ((UiColor){0x08, 0x16, 0x05, 0xD8})
-#define UI_WHITE      ((UiColor){0xF2, 0xFF, 0xEA, 0xFF})
-#define UI_GREY       ((UiColor){0x9A, 0xB0, 0x90, 0xFF})
-#define UI_RED        ((UiColor){0xFF, 0x60, 0x50, 0xFF})
+/* The themes (the skins' colours): Green is the original Xbox dashboard's
+ * greens on black, Neon is cyan and magenta on blue-black with cut corners,
+ * Tron Red is red and amber on black, cut corners too. The UI_* colours are
+ * the current theme's; a colour written out in the code as green (a literal
+ * of the green theme) goes through ui_th, which turns it to the theme. */
+typedef struct {
+    UiColor green, green_hi, green_dim, green_dark, panel, white, grey, red;
+    UiColor accent2;    /* the second colour: magenta, amber, a blue for green */
+    UiColor ok;         /* status "good": never the accent */
+    float hue;          /* degrees a green literal's hue is turned to, <0: not turned */
+    bool cut;           /* the corners cut instead of rounded (Neon, Tron Red) */
+} UiTheme;
+enum { UI_THEME_GREEN, UI_THEME_NEON, UI_THEME_RED, UI_THEME_COUNT };
+const UiTheme *ui_theme(void);
+int ui_theme_id(void);
+void ui_theme_set(int id);
+int ui_theme_from_name(const char *name);   /* "green", "neon", "red"; unknown: green */
+const char *ui_theme_name(int id);
+/* A colour of the green theme turned to the current theme. */
+UiColor ui_th(int r, int g, int b, int a);
+
+#define UI_GREEN      (ui_theme()->green)
+#define UI_GREEN_HI   (ui_theme()->green_hi)
+#define UI_GREEN_DIM  (ui_theme()->green_dim)
+#define UI_GREEN_DARK (ui_theme()->green_dark)
+#define UI_PANEL      (ui_theme()->panel)
+#define UI_WHITE      (ui_theme()->white)
+#define UI_GREY       (ui_theme()->grey)
+#define UI_RED        (ui_theme()->red)
+#define UI_ACCENT2    (ui_theme()->accent2)
+#define UI_OK         (ui_theme()->ok)
 #define UI_BLACK      ((UiColor){0, 0, 0, 0xFF})
 
 static inline UiColor ui_alpha(UiColor c, float a)
@@ -70,11 +92,17 @@ double ui_time(void);  /* seconds since ui_init */
 /* Text in 720p units: size is the font's pixel height. */
 float ui_text(float x, float y, const char *utf8, float size, int font, UiColor c, int align);
 float ui_text_width(const char *utf8, float size, int font);
+/* Text reading upward (a vertical strip's label): x the line's left edge, y
+ * its bottom; its length. Not drawn in a game's overlay. */
+float ui_text_up(float x, float y, const char *utf8, float size, int font, UiColor c);
 /* Text cut to max_w with an ellipsis. */
 float ui_text_fit(float x, float y, const char *utf8, float size, int font, UiColor c, int align, float max_w);
 
 void ui_rect(float x, float y, float w, float h, UiColor c);
 void ui_rect_grad(float x, float y, float w, float h, UiColor top, UiColor bottom);
+/* A smooth curved band: spans xl[k]..xr[k] at y[k], shaded cl to cr across. */
+#define UI_BAND_MAX 64
+void ui_band(const float *xl, const float *xr, const float *y, int n, UiColor cl, UiColor cr);
 void ui_rect_hgrad(float x, float y, float w, float h, UiColor left, UiColor right);
 void ui_round(float x, float y, float w, float h, float r, UiColor c);
 void ui_round_outline(float x, float y, float w, float h, float r, float t, UiColor c);

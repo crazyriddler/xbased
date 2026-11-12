@@ -1058,7 +1058,7 @@ static void overlay_tick(void)
         ui_set_alpha(a);
         const float sz = 22, w = ui_text_width(g_notice, sz, UI_FONT_REGULAR) + 56;
         const float x = (ui_w() - w) / 2, y = ui_h() - 96 + (1 - a) * 12;
-        ui_round(x, y, w, 46, 23, (UiColor){0x08, 0x16, 0x05, 0xE0});
+        ui_round(x, y, w, 46, 23, ui_th(0x08, 0x16, 0x05, 0xE0));
         ui_round_outline(x, y, w, 46, 23, 1.5f, ui_alpha(UI_GREEN, 0.7f));
         ui_glow(x + 24, y + 23, 14, ui_alpha(UI_GREEN, 0.8f));
         ui_text(x + 40, y + 10, g_notice, sz, UI_FONT_REGULAR, UI_WHITE, UI_ALIGN_LEFT);

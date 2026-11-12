@@ -157,6 +157,8 @@ void dash_browse_file(const char *title, const char *exts, SDL_DialogFileCallbac
 void scr_browse(void);
 /* a game file started without adding it to the library: one chosen, or
  * dropped on the window; dash_take_folder starts it from the UI's thread */
+void dash_apply_skin(void);
+void dash_open_game(LibGame *g);
 void dash_play_file_later(const char *path);
 void dash_pick_play_file(void);
 void dash_take_folder(void);

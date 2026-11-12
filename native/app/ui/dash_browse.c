@@ -1034,7 +1034,7 @@ void scr_browse(void)
             bw = ui_text_width(t, 22, UI_FONT_BOLD) + 74;
             bx = fx + fw - bw;
             const bool over = in.mx >= bx && in.mx < bx + bw && in.my >= 128 && in.my < 172;
-            ui_round(bx, 128, bw, 44, 22, over ? (UiColor){0x3C, 0x9A, 0x12, 0xFF} : (UiColor){0x10, 0x2C, 0x07, 0xE0});
+            ui_round(bx, 128, bw, 44, 22, over ? ui_th(0x3C, 0x9A, 0x12, 0xFF) : ui_th(0x10, 0x2C, 0x07, 0xE0));
             ui_round_outline(bx, 128, bw, 44, 22, over ? 2 : 1, over ? UI_GREEN_HI : UI_GREEN_DIM);
             draw_button_glyph(bx + 12, 135, 2, 30);
             ui_text(bx + bw - 18, 138, t, 22, UI_FONT_BOLD, UI_WHITE, UI_ALIGN_RIGHT);
