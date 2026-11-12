@@ -18,8 +18,11 @@
 #include <time.h>
 #include <unistd.h>
 #include <stdint.h>
+#ifndef __APPLE__
 #include <sys/random.h>
+#endif
 
+#if defined(__GLIBC__)
 #if !__GLIBC_PREREQ(2, 36)
 void arc4random_buf(void *buf, size_t n)
 {
@@ -55,7 +58,9 @@ uint32_t arc4random_uniform(uint32_t bound)
     }
 }
 #endif
+#endif
 
+#if defined(__GLIBC__)
 #if !__GLIBC_PREREQ(2, 38)
 size_t strlcpy(char *dst, const char *src, size_t n)
 {
@@ -67,6 +72,7 @@ size_t strlcpy(char *dst, const char *src, size_t n)
     }
     return len;
 }
+#endif
 #endif
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -83,7 +89,11 @@ static struct {
 static void props_path(char *out, size_t n)
 {
     char exe[PATH_MAX];
+#ifdef __APPLE__
+    ssize_t k = (ssize_t)nc_exe_path(exe, sizeof(exe));
+#else
     ssize_t k = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+#endif
     if (k <= 0) {
         snprintf(out, n, "props.ini");
         return;
@@ -223,5 +233,13 @@ void nc_win_thread_name(const char *name)
 
 void nc_win_thread_priority(int level)
 {
+#ifdef __APPLE__
+    if (level > 0) {
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    } else if (level < 0) {
+        pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+    }
+#else
     (void)level;    /* raising it needs privileges on Linux; the scheduler's default */
+#endif
 }

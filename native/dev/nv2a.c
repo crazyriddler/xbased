@@ -41,6 +41,7 @@
 #include <time.h>
 #ifdef _WIN32
 #include <windows.h>
+#elif defined(__APPLE__)
 #elif defined(NC_DESKTOP)
 #include <linux/futex.h>
 #include <sys/syscall.h>
@@ -846,7 +847,18 @@ static bool uncapped(void)
  * later each frame: at 370 fps Conker's vCPU idled waiting for it. */
 static volatile uint32_t g_flip_waits;
 
-#ifndef _WIN32
+#if defined(__APPLE__)
+static void WakeByAddressAll(void *p)
+{
+    nc_futex_wake_all(p);
+}
+
+static void WaitOnAddress(volatile void *p, void *expected, size_t n, unsigned ms)
+{
+    (void)n;
+    nc_futex_wait(p, *(uint32_t *)expected, ms);
+}
+#elif !defined(_WIN32)
 /* Linux: WaitOnAddress / WakeByAddressAll as futexes */
 static void WakeByAddressAll(void *p)
 {
