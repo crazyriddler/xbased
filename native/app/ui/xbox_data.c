@@ -306,6 +306,7 @@ bool xd_read_game(const char *path, XdGame *g)
         uint8_t h0[0x200];
         uint32_t size = 0;
         if (rd_at(&d, (int64_t)sec * 2048, h0, sizeof(h0)) && !memcmp(h0, "XBEH", 4)) {
+            g->valid = true;
             size = rd32(h0 + 0x108);    /* the headers' size */
             size = size < 0x200 ? 0x200 : size > xsize ? xsize : size > (4u << 20) ? 4u << 20 : size;
             x = malloc(size);
@@ -363,8 +364,25 @@ bool xd_read_game(const char *path, XdGame *g)
     } else {
         fclose(d.f);
     }
-    snprintf(g->key, sizeof(g->key), "%08X.%u", g->title_id, g->version);
+    xd_make_key(g);
     return ok;
+}
+
+/* The game's settings/states/cover key: "<TITLE ID>.<version>". No title id (XBE ports and much
+ * homebrew: 0, or none) would make every such game "00000000.0", sharing one cover, one settings
+ * file and one set of save states, each taking the others' pictures: the name hashed tells them
+ * apart. */
+void xd_make_key(XdGame *g)
+{
+    if (g->title_id) {
+        snprintf(g->key, sizeof(g->key), "%08X.%u", g->title_id, g->version);
+        return;
+    }
+    uint32_t h = 2166136261u;
+    for (const unsigned char *t = (const unsigned char *)g->title; *t; t++) {
+        h = (h ^ (uint32_t)(*t >= 'A' && *t <= 'Z' ? *t + 32 : *t)) * 16777619u;
+    }
+    snprintf(g->key, sizeof(g->key), "%08X.%u~%06x", g->title_id, g->version % 1000u, h & 0xFFFFFFu);
 }
 
 void xd_free_game(XdGame *g)

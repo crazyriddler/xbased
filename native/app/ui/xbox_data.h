@@ -19,6 +19,7 @@ typedef struct XdGame {
     uint8_t *icon;          /* RGBA, icon_w x icon_h, or NULL */
     int icon_w, icon_h;
     int64_t size;
+    bool valid;             /* an Xbox disc image: an XDVDFS with a default.xbe in it (false: some other disc) */
     uint32_t disc_sig;      /* this disc (xd_read_game): another dump of it the same, a modified one not; 0 unknown */
     /* the certificate's save signing keys: its own (+0xC0), and for each
      * alternate title ID (+0x5C) that title's (+0xD0); not in the library's
@@ -33,6 +34,8 @@ typedef struct XdGame {
  * False when it isn't one; the title is the file's name then. */
 bool xd_read_game(const char *path, XdGame *g);
 void xd_free_game(XdGame *g);
+/* g->key from its title id, version and (with no id) its title; the title is set first */
+void xd_make_key(XdGame *g);
 /* A file's name without its folders, extension and (...) [...] groups. */
 void xd_clean_name(const char *path, char *out, size_t n);
 

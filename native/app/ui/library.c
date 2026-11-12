@@ -496,6 +496,11 @@ static void cache_load(const ScanArgs *a, const bool *there)
         return;
     }
     char line[1600];
+    /* "#v2": checked for being Xbox disc images; a cache without it is read again, file by file */
+    const bool checked = fgets(line, sizeof(line), f) && !strncmp(line, "#v2", 3);
+    if (!checked) {
+        rewind(f);
+    }
     while (L.n < MAX_GAMES && fgets(line, sizeof(line), f)) {
         char *fld[9];
         int k = 0;
@@ -529,8 +534,11 @@ static void cache_load(const ScanArgs *a, const bool *there)
         } else {
             e->mtime = -1;      /* written before the year or the disc's signature were: read again */
         }
+        if (!checked) {
+            e->mtime = -1;      /* written before the check: read again */
+        }
         snprintf(g->title, sizeof(g->title), "%.*s", (int)strcspn(title, "\r\n"), title);
-        snprintf(g->key, sizeof(g->key), "%08X.%u", g->title_id, g->version);
+        xd_make_key(g);
         e->gone = !there[in];   /* its disk is away */
         custom_apply(e);
         insert(e);
@@ -552,6 +560,7 @@ static void cache_save(const ScanArgs *a)
     if (!f) {
         return;
     }
+    fputs("#v2\n", f);
     SDL_LockMutex(L.mu);
     for (int i = 0; i < L.n; i++) {
         const LibGame *g = L.games[i];
@@ -605,6 +614,19 @@ static void add_game(const char *path, const SDL_PathInfo *pi)
     /* new, or changed since: read */
     XdGame g;
     xd_read_game(path, &g);
+    if (!g.valid) {
+        /* not an Xbox disc image (another system's, or some other file): not a game of the
+         * library; one cached before this check goes out of the list */
+        xd_free_game(&g);
+        SDL_LockMutex(L.mu);
+        if (e && !e->replaced) {
+            e->gone = e->replaced = true;
+            e->dup = false;
+            dedupe(e);
+        }
+        SDL_UnlockMutex(L.mu);
+        return;
+    }
     if (g.icon) {
         char ip[1200];
         icon_path(&g, ip, sizeof(ip));
