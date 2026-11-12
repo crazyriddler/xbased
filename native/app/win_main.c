@@ -815,6 +815,7 @@ static void fs_mode(SDL_Window *w)
 static int g_fps_cap;   /* ... its limit, uncapped (0: none) */
 static float g_volume = 1.0f;
 static bool g_mute_bg = true;   /* silent while the window isn't the active one */
+static bool g_pause_bg;         /* hold the game while the window is in the background */
 
 /* screenshots\<title>-<date>.bmp beside the executable */
 static void screenshot(void)
@@ -1121,6 +1122,9 @@ static void apply_cfg(const Config *global, const Config *game, bool sound)
         }
         if ((v = cfg_get(c, "mutebg"))) {
             g_mute_bg = atoi(v) != 0;
+        }
+        if ((v = cfg_get(c, "pausebg"))) {
+            g_pause_bg = atoi(v) != 0;
         }
     }
     nc_present_set_crop(crop_h, crop_v);
@@ -1656,6 +1660,8 @@ int main(int argc, char *argv[])
             nc_present_set_show_fps(atoi(a + 8) != 0);
         } else if (!strncmp(a, "mutebg=", 7)) {
             g_mute_bg = atoi(a + 7) != 0;
+        } else if (!strncmp(a, "pausebg=", 8)) {
+            g_pause_bg = atoi(a + 8) != 0;
         }
     }
     nc_win_mods_prepare(g_exe_dir, g_disc_fd, g_args, g_nargs);
@@ -1789,7 +1795,7 @@ int main(int argc, char *argv[])
     pthread_attr_destroy(&attr);
 
     nc_win_thread_name("window");
-    bool quit = false, paused = false, minimized = false, focused = true, told = false;
+    bool quit = false, paused = false, minimized = false, focused = true, told = false, bg_paused = false;
     while (!quit) {
         SDL_Event ev;
         while (SDL_PollEvent(&ev)) {
@@ -1911,11 +1917,24 @@ int main(int argc, char *argv[])
             case SDL_EVENT_WINDOW_FOCUS_GAINED:
                 focused = true;
                 nc_audio_set_volume(g_volume);
+                if (bg_paused) {
+                    bg_paused = false;
+                    minimized = false;
+                    nc_kernel_set_paused(&g_core.kernel, paused);
+                    nc_audio_set_paused(paused);
+                }
                 break;
             case SDL_EVENT_WINDOW_FOCUS_LOST:
                 focused = false;
                 if (g_mute_bg) {
                     nc_audio_set_volume(0);
+                }
+                if (g_pause_bg && !bg_paused) {
+                    /* held like a minimized window (Settings > Video) */
+                    bg_paused = true;
+                    minimized = true;
+                    nc_kernel_set_paused(&g_core.kernel, true);
+                    nc_audio_set_paused(true);
                 }
                 break;
             default:

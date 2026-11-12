@@ -234,6 +234,7 @@ void scr_settings(void)
         opt_choice(&l, S_AUDIO_OUTPUT, "audio", av, an, 2, "stereo");
         opt_int(&l, S_VOLUME, "volume", 0, 100, 5, 100, "%");
         opt_bool(&l, S_MUTE_BG, "mutebg", true, false);
+        opt_bool(&l, S_PAUSE_BG, "pausebg", false, false);
         opt_bool(&l, S_UI_SOUNDS, "ui.sounds", true, false);
         break;
     }
