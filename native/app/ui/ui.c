@@ -761,6 +761,139 @@ void ui_rect_hgrad(float x, float y, float w, float h, UiColor left, UiColor rig
     quad(x, y, w, h, left, right, right, left);
 }
 
+/* ------------------------------------------------------------ 3D case */
+
+static bool g_case3d_on = true;
+
+void ui_case3d_set(bool on)
+{
+    g_case3d_on = on;
+}
+
+bool ui_case3d_enabled(void)
+{
+    return g_case3d_on;
+}
+
+/* A game's case from its cover: the cover is the front face, a spine at the left in
+ * the theme's colour, the box turned by yaw (radians; negative shows the spine, the
+ * far edge smaller as perspective has it). The front is cut into strips, each with
+ * its own texture coordinates, so the picture isn't skewed across two triangles. It
+ * is fitted and centred in (x, y, w, h); a soft shadow under it, a gloss over the
+ * front. */
+void ui_case3d(UiTex *t, float x, float y, float w, float h, float yaw, float alpha)
+{
+    if (!t || w < 4 || h < 4) {
+        return;
+    }
+    alpha = clamp01(alpha);
+    const float aspect = t->h > 0 ? (float)t->w / (float)t->h : 0.72f;
+    const float c = cosf(yaw), sn = sinf(yaw), asn = fabsf(sn);
+    float fh = h * 0.9f, fw = fh * aspect, dd = fh * 0.14f;
+    const float tot = fw * c + dd * asn;
+    const float k = fminf(1.0f, w * 0.96f / tot);
+    fh *= k;
+    fw *= k;
+    dd *= k;
+    const float f = fh * 5.0f;
+#define COLS 10
+    /* the points: rows 0 (top) and 1 (bottom), the front's columns, then the spine's two ends */
+    float px[COLS + 3][2], py[COLS + 3][2], pz[COLS + 3];
+    for (int i = 0; i <= COLS + 2; i++) {
+        float X, Z;
+        if (i <= COLS) {
+            X = -fw / 2 + fw * (float)i / COLS;
+            Z = -dd / 2;
+        } else {
+            X = -fw / 2;
+            Z = i == COLS + 1 ? dd / 2 : -dd / 2;   /* COLS + 1: the spine's back edge */
+        }
+        const float xr = X * c + Z * sn, zr = -X * sn + Z * c;
+        const float sp = f / (f + zr);
+        pz[i] = zr;
+        px[i][0] = px[i][1] = xr * sp;
+        py[i][0] = -fh / 2 * sp;
+        py[i][1] = fh / 2 * sp;
+    }
+    float minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f;
+    for (int i = 0; i <= COLS + 1; i++) {
+        minx = fminf(minx, px[i][0]);
+        maxx = fmaxf(maxx, px[i][0]);
+        miny = fminf(miny, py[i][0]);
+        maxy = fmaxf(maxy, py[i][1]);
+    }
+    const float ox = x + w / 2 - (minx + maxx) / 2, oy = y + h / 2 - (miny + maxy) / 2, sc = U.scale;
+    for (int i = 0; i <= COLS + 2; i++) {
+        for (int r = 0; r < 2; r++) {
+            px[i][r] = (px[i][r] + ox) * sc;
+            py[i][r] = (py[i][r] + oy) * sc;
+        }
+    }
+    /* the shadow on the ground */
+    {
+        const float sw = (maxx - minx) * 0.9f, sy = oy + maxy + 2;
+        ui_round(x + w / 2 - sw / 2, sy, sw, fmaxf(6.0f, fh * 0.05f), fmaxf(3.0f, fh * 0.025f),
+                 (UiColor){0, 0, 0, (uint8_t)lrintf(70 * alpha)});
+    }
+    /* the spine (the cover's picture is not on it): the theme's colour, darker toward the back */
+    {
+        const UiColor a = ui_mix(UI_GREEN_DARK, UI_BLACK, 0.25f), b = ui_mix(UI_GREEN_DARK, UI_BLACK, 0.7f);
+        const SDL_FColor fa = fc((UiColor){a.r, a.g, a.b, (uint8_t)lrintf(255 * alpha)}),
+                         fb = fc((UiColor){b.r, b.g, b.b, (uint8_t)lrintf(255 * alpha)});
+        SDL_Vertex v[4] = {
+            {{px[COLS + 1][0], py[COLS + 1][0]}, fb, {0, 0}},
+            {{px[0][0], py[0][0]}, fa, {0, 0}},
+            {{px[0][1], py[0][1]}, fa, {0, 0}},
+            {{px[COLS + 1][1], py[COLS + 1][1]}, fb, {0, 0}},
+        };
+        static const int idx[6] = {0, 1, 2, 0, 2, 3};
+        if (sn < -0.02f) {
+            geom(NULL, v, 4, idx, 6);
+        }
+    }
+    /* the front: strips, shaded darker toward the far edge */
+    {
+        SDL_Vertex v[2 * (COLS + 1)];
+        int idx[6 * COLS];
+        for (int i = 0; i <= COLS; i++) {
+            const float far_k = clamp01((pz[i] - pz[0]) / fmaxf(1.0f, fabsf(pz[COLS] - pz[0]) + 1e-3f));
+            const float sh = 1.0f - 0.16f * far_k * (yaw < 0 ? 1 : 0);
+            const SDL_FColor col = {sh, sh, sh, alpha};
+            const float u = (float)i / COLS;
+            v[2 * i] = (SDL_Vertex){{px[i][0], py[i][0]}, col, {u, 0}};
+            v[2 * i + 1] = (SDL_Vertex){{px[i][1], py[i][1]}, col, {u, 1}};
+        }
+        for (int i = 0; i < COLS; i++) {
+            const int a = 2 * i, b = 2 * i + 1, c2 = 2 * i + 2, d = 2 * i + 3;
+            int *q = idx + 6 * i;
+            q[0] = a; q[1] = c2; q[2] = d;
+            q[3] = a; q[4] = d; q[5] = b;
+        }
+        geom(t, v, 2 * (COLS + 1), idx, 6 * COLS);
+        /* the gloss: a pale wedge from the top left corner fading out */
+        const SDL_FColor g0 = {1, 1, 1, 0.26f * alpha}, g1 = {1, 1, 1, 0};
+        const int m = COLS / 2;
+        SDL_Vertex gl[4] = {
+            {{px[0][0], py[0][0]}, g0, {0, 0}},
+            {{px[m + 2][0], py[m + 2][0]}, g1, {0, 0}},
+            {{px[m - 2][1], py[m - 2][1]}, g1, {0, 0}},
+            {{px[0][1], py[0][1]}, g1, {0, 0}},
+        };
+        static const int gi[6] = {0, 1, 2, 0, 2, 3};
+        geom(NULL, gl, 4, gi, 6);
+        /* a bright edge where spine and front meet, and a dark rim around it all */
+        const SDL_FColor e0 = {1, 1, 1, 0.45f * alpha};
+        SDL_Vertex ed[4] = {
+            {{px[0][0] - sc * 0.5f, py[0][0]}, e0, {0, 0}},
+            {{px[0][0] + sc * 1.0f, py[0][0]}, e0, {0, 0}},
+            {{px[0][1] + sc * 1.0f, py[0][1]}, e0, {0, 0}},
+            {{px[0][1] - sc * 0.5f, py[0][1]}, e0, {0, 0}},
+        };
+        geom(NULL, ed, 4, gi, 6);
+    }
+#undef COLS
+}
+
 #define ARC 8   /* segments a corner */
 
 static int round_path(float x, float y, float w, float h, float r, SDL_FPoint *pt)

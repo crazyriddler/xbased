@@ -16,6 +16,8 @@ typedef struct LibGame {
     XdGame g;               /* g.title: the name shown (the user's, if renamed) */
     UiTex *icon_tex, *cover_tex;
     bool cover_tried;       /* its file looked for */
+    UiTex *cover3d_tex;     /* the user's own 3D box art (covers/<key>-3d.png), when there is one */
+    bool cover3d_tried;
     int64_t mtime;
     char orig[128];         /* renamed: the disc's own name; "" otherwise */
     bool hidden;            /* hidden from the Games screen (lib_show_hidden) */
@@ -51,6 +53,7 @@ const char *lib_publisher(const LibGame *g);
 /* Textures for the ones on screen (the UI's thread). */
 UiTex *lib_icon(LibGame *g);
 UiTex *lib_cover(LibGame *g);
+UiTex *lib_cover3d(LibGame *g);     /* the user's own 3D box art, or NULL */
 /* Box art: g's (or every game's without one) fetched on a thread. */
 void lib_fetch_cover(LibGame *g);
 void lib_fetch_all_covers(void);

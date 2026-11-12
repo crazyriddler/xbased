@@ -1539,8 +1539,21 @@ static void draw_card(LibGame *g, float x, float y, float w, float h, bool sel, 
     if (sel) {
         ui_glow(x + w / 2, y + h / 2, w * 1.1f, ui_alpha(UI_GREEN, 0.35f * alpha));
     }
-    ui_round(x, y, w, h, 10, ui_alpha((UiColor){0x0E, 0x26, 0x07, 0xFF}, alpha));
     UiTex *cv = lib_cover(g);
+    if (ui_case3d_enabled() && h >= 90 && (cv || lib_cover3d(g))) {
+        /* a case standing on the shelf: the selected one turns to face you */
+        UiTex *own = lib_cover3d(g);
+        if (own) {
+            ui_image(own, x, y, w, h, alpha);
+        } else {
+            ui_case3d(cv, x, y, w, h, sel ? -0.34f : -0.62f, alpha);
+        }
+        if (sel) {
+            ui_round_outline(x, y, w, h, 10, 2, ui_alpha(UI_GREEN_HI, alpha * 0.55f));
+        }
+        return;
+    }
+    ui_round(x, y, w, h, 10, ui_alpha((UiColor){0x0E, 0x26, 0x07, 0xFF}, alpha));
     if (cv) {
         ui_image(cv, x + 4, y + 4, w - 8, h - 8, alpha);
     } else {
@@ -2498,6 +2511,7 @@ int dash_run(SDL_Window *win, const char *exe)
             }
         }
         snd_enable(cfg_bool(&D.global, "ui.sounds", true));
+        ui_case3d_set(cfg_bool(&D.global, "ui.case3d", true));
         if (g_go.on && g_go.t0 >= 0) {
             /* into the game: the screen's picture breaks; the game's window
              * comes up on the black it leaves */

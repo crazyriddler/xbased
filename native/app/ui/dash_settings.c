@@ -281,6 +281,7 @@ void scr_settings(void)
         }
         opt_bool(&l, S_COVERS_ONLINE, "covers", true, false);
         opt_bool(&l, S_ANIMATED_BG, "ui.anim", true, false);
+        opt_bool(&l, S_CASE3D, "ui.case3d", true, false);
         opt_bool(&l, S_TRANSITIONS, "ui.fx", true, false);
         opt_bool(&l, S_UI_SOUNDS, "ui.sounds", true, false);
         opt_bool(&l, S_CHECK_UPDATES, "update.check", true, false);

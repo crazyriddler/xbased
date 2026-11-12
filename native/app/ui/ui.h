@@ -89,6 +89,12 @@ UiTex *ui_texture_rgba(const uint8_t *rgba, int w, int h);
 UiTex *ui_texture_surface(SDL_Surface *s);
 void ui_texture_free(UiTex *t);
 void ui_texture_size(const UiTex *t, float *w, float *h);
+/* A game's case drawn from its cover (ui.c): the front, a spine, perspective and a gloss, fitted
+ * and centred in the rectangle; yaw in radians (negative shows the spine on the left). The
+ * "3D game cases" setting. */
+void ui_case3d(UiTex *t, float x, float y, float w, float h, float yaw, float alpha);
+void ui_case3d_set(bool on);
+bool ui_case3d_enabled(void);
 /* A texture over the whole window, its colour modulated by c. */
 void ui_fill(UiTex *t, UiColor c);
 /* The game's picture under the overlay, as the window would show it, or

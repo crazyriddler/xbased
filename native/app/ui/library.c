@@ -932,6 +932,18 @@ UiTex *lib_cover(LibGame *g)
     return g->cover_tex;
 }
 
+UiTex *lib_cover3d(LibGame *g)
+{
+    if (!g->cover3d_tex && !g->cover3d_tried) {
+        char p[1200], d[1000];
+        covers_dir(d, sizeof(d));
+        snprintf(p, sizeof(p), "%s/%s-3d.png", d, g->g.key);
+        g->cover3d_tex = lib_load_png(p);
+        g->cover3d_tried = true;
+    }
+    return g->cover3d_tex;
+}
+
 /* the same game as g (its key), not merely two discs that couldn't be read */
 static bool same_game(const LibGame *e, const LibGame *g)
 {
@@ -1415,6 +1427,9 @@ void lib_shutdown(void)
         }
         if (g->cover_tex) {
             ui_texture_free(g->cover_tex);
+        }
+        if (g->cover3d_tex) {
+            ui_texture_free(g->cover3d_tex);
         }
         free(g);
     }
