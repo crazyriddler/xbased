@@ -41,6 +41,7 @@
 #include "native/core/fold_image.h"
 #include "native/app/win_frame.h"
 #ifndef _WIN32
+#include <math.h>
 #include <poll.h>
 #include <sys/wait.h>
 #endif
@@ -528,7 +529,7 @@ static void pads_changed(void)
     for (int p = 0; p < 4; p++) {
         const int d = g_map.device[p];
         /* player 1 always (the keyboard, unless set to none); the others with a pad */
-        if (d != -2 && (player_pad(p) || (p == 0 && d <= 0) || d == -1)) {
+        if (d != -2 && (player_pad(p) || (p == 0 && d <= 0) || d == -1 || d == -3)) {
             mask |= 1u << p;
         }
     }
@@ -622,6 +623,175 @@ static bool pad_in_shortcut(SDL_Gamepad *pad)
     return pad_guide_held(pad);
 }
 
+static SDL_AtomicInt g_saving;
+static void save_state(int slot);
+static void load_state(int slot);
+static void notice(const char *text, const char *after_file);
+
+/* ---- the mouse as a stick (Settings > Controls): a click on the game captures it, F3 or Esc lets go */
+static bool g_mouse_cap;            /* captured (relative mouse mode) */
+static bool g_mouse_skip;           /* the capturing click is still down: not the game's */
+static float g_mouse_dx, g_mouse_dy;    /* motion since the last poll, in pixels */
+static float g_mouse_sx, g_mouse_sy;    /* the stick it gives, smoothed */
+static Uint64 g_mouse_t;
+static Uint64 g_wheel_until[2];     /* the wheel's "buttons" last a moment */
+
+static void mouse_release(SDL_Window *win)
+{
+    if (g_mouse_cap) {
+        SDL_SetWindowRelativeMouseMode(win, false);
+        SDL_HideCursor();
+    }
+    g_mouse_cap = false;
+    g_mouse_dx = g_mouse_dy = g_mouse_sx = g_mouse_sy = 0;
+}
+
+static void mouse_capture(SDL_Window *win)
+{
+    if (SDL_SetWindowRelativeMouseMode(win, true)) {
+        g_mouse_cap = true;
+        g_mouse_skip = true;
+        g_mouse_dx = g_mouse_dy = g_mouse_sx = g_mouse_sy = 0;
+        g_mouse_t = SDL_GetTicks();
+        notice(T(S_MOUSE_CAPTURED), NULL);
+    }
+}
+
+/* the mouse's part of player 1's state: its stick, and its buttons as the pad's */
+static void mouse_apply(ImPad *m)
+{
+    const Uint64 now = SDL_GetTicks();
+    const float dt = (float)(now - g_mouse_t > 0 ? now - g_mouse_t : 1);
+    g_mouse_t = now;
+    /* pixels a millisecond: 1.5 of them (1500 a second) is the stick's full travel at 1x */
+    const float k = g_map.mouse_sens / 1.5f;
+    float tx = g_mouse_dx / dt * k, ty = -g_mouse_dy / dt * k * (g_map.mouse_invert ? -1.0f : 1.0f);
+    g_mouse_dx = g_mouse_dy = 0;
+    tx = tx < -1 ? -1 : tx > 1 ? 1 : tx;
+    ty = ty < -1 ? -1 : ty > 1 ? 1 : ty;
+    const float a = 1.0f - expf(-dt / 30.0f);   /* ~30 ms: the counts of a few polls make one move */
+    g_mouse_sx += (tx - g_mouse_sx) * a;
+    g_mouse_sy += (ty - g_mouse_sy) * a;
+    float sx = fabsf(g_mouse_sx) < 0.01f ? 0 : g_mouse_sx, sy = fabsf(g_mouse_sy) < 0.01f ? 0 : g_mouse_sy;
+    if (sx != 0 || sy != 0) {
+        /* past the game's own dead zone at once, as the sticks' anti dead zone does */
+        const float r = sqrtf(sx * sx + sy * sy);
+        const float lift = g_map.stick_antidz;
+        const float f = r > 0 ? (lift + (r > 1 ? 1 : r) * (1 - lift)) / r : 0;
+        sx = sx * f > 1 ? 1 : sx * f < -1 ? -1 : sx * f;
+        sy = sy * f > 1 ? 1 : sy * f < -1 ? -1 : sy * f;
+        int16_t *px = g_map.mouse_stick ? &m->lx : &m->rx, *py = g_map.mouse_stick ? &m->ly : &m->ry;
+        if (fabsf(sx * 32767) > abs(*px)) {
+            *px = (int16_t)(sx * 32767);
+        }
+        if (fabsf(sy * 32767) > abs(*py)) {
+            *py = (int16_t)(sy * 32767);
+        }
+    }
+    unsigned down = 0;
+    if (!g_mouse_skip) {
+        const SDL_MouseButtonFlags b = SDL_GetMouseState(NULL, NULL);
+        down |= (b & SDL_BUTTON_LMASK) ? 1u : 0u;
+        down |= (b & SDL_BUTTON_RMASK) ? 2u : 0u;
+        down |= (b & SDL_BUTTON_MMASK) ? 4u : 0u;
+        down |= (b & SDL_BUTTON_X1MASK) ? 8u : 0u;
+        down |= (b & SDL_BUTTON_X2MASK) ? 16u : 0u;
+    } else if (!(SDL_GetMouseState(NULL, NULL) & (SDL_BUTTON_LMASK | SDL_BUTTON_RMASK | SDL_BUTTON_MMASK))) {
+        g_mouse_skip = false;
+    }
+    down |= now < g_wheel_until[0] ? 32u : 0u;
+    down |= now < g_wheel_until[1] ? 64u : 0u;
+    for (int i = 0; i < IM_MOUSE_BTNS; i++) {
+        if (!(down & (1u << i))) {
+            continue;
+        }
+        switch (g_map.mouse_btn[i]) {
+        case 1: m->analog[0] = 255; break;                  /* A */
+        case 2: m->analog[1] = 255; break;                  /* B */
+        case 3: m->analog[2] = 255; break;                  /* X */
+        case 4: m->analog[3] = 255; break;                  /* Y */
+        case 5: m->buttons |= 0x20; break;                  /* Back */
+        case 6: m->buttons |= 0x10; break;                  /* Start */
+        case 7: m->buttons |= 0x40; break;                  /* left stick click */
+        case 8: m->buttons |= 0x80; break;                  /* right stick click */
+        case 9: m->analog[5] = 255; break;                  /* White */
+        case 10: m->analog[4] = 255; break;                 /* Black */
+        case 11: m->buttons |= 1; break;                    /* d-pad up, down, left, right */
+        case 12: m->buttons |= 2; break;
+        case 13: m->buttons |= 4; break;
+        case 14: m->buttons |= 8; break;
+        case 15: m->analog[6] = 255; break;                 /* left trigger */
+        case 16: m->analog[7] = 255; break;                 /* right trigger */
+        default: break;
+        }
+    }
+}
+
+/* The controller input of one port, from several sources: what is pressed on any of them */
+static void pad_merge(ImPad *to, const ImPad *from)
+{
+    to->buttons |= from->buttons;
+    for (int i = 0; i < 8; i++) {
+        if (from->analog[i] > to->analog[i]) {
+            to->analog[i] = from->analog[i];
+        }
+    }
+    if (abs(from->lx) + abs(from->ly) > abs(to->lx) + abs(to->ly)) {
+        to->lx = from->lx;
+        to->ly = from->ly;
+    }
+    if (abs(from->rx) + abs(from->ry) > abs(to->rx) + abs(to->ry)) {
+        to->rx = from->rx;
+        to->ry = from->ry;
+    }
+}
+
+/* Back held with a bumper (or the combo chosen): a quick save to slot 1, the other side loads it */
+static void quick_buttons(void)
+{
+    static bool was_save, was_load;
+    static Uint64 last;
+    bool save = false, load = false;
+    if (g_map.quick) {
+        for (int k = 0; k < 4; k++) {
+            SDL_Gamepad *pad = g_pads[k];
+            if (!pad || !SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_BACK) ||
+                SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_START)) {
+                continue;
+            }
+            switch (g_map.quick_combo) {
+            case 1:
+                save |= SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000;
+                load |= SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000;
+                break;
+            case 2:
+                save |= SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_STICK);
+                load |= SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK);
+                break;
+            case 3:
+                save |= SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_LEFT);
+                load |= SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_DPAD_RIGHT);
+                break;
+            default:
+                save |= SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER);
+                load |= SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER);
+                break;
+            }
+        }
+    }
+    const Uint64 now = SDL_GetTicks();
+    const bool ready = now - last > 1500 && SDL_GetAtomicInt(&g_core_state) == 1 && !SDL_GetAtomicInt(&g_saving);
+    if (save && !was_save && ready) {
+        last = now;
+        save_state(1);
+    } else if (load && !was_load && ready) {
+        last = now;
+        load_state(1);
+    }
+    was_save = save;
+    was_load = load;
+}
+
 static void update_pads(bool focused)
 {
     const bool *keys = SDL_GetKeyboardState(NULL);
@@ -644,11 +814,27 @@ static void update_pads(bool focused)
     for (unsigned i = 0; i < 4; i++) {
         NcPadState s;
         memset(&s, 0, sizeof(s));
+        const bool all = g_map.device[i] == -3;         /* the keyboard, the mouse and every controller */
         SDL_Gamepad *pad = player_pad((int)i);
         /* the keyboard: player 1 on auto, any player set to it */
-        const bool kb = focused && (g_map.device[i] == -1 || (i == 0 && g_map.device[i] == 0));
+        const bool kb = focused && (g_map.device[i] == -1 || all || (i == 0 && g_map.device[i] == 0));
         ImPad m;
-        im_read(&g_map, (int)i, kb ? keys : NULL, pad_in_shortcut(pad) ? NULL : pad, &m);
+        if (all) {
+            im_read(&g_map, (int)i, kb ? keys : NULL, NULL, &m);
+            for (int k = 0; k < 4; k++) {
+                if (g_pads[k] && !pad_in_shortcut(g_pads[k])) {
+                    ImPad t;
+                    im_read(&g_map, (int)i, NULL, g_pads[k], &t);
+                    pad_merge(&m, &t);
+                }
+            }
+        } else {
+            im_read(&g_map, (int)i, kb ? keys : NULL, pad_in_shortcut(pad) ? NULL : pad, &m);
+        }
+        /* the mouse is the keyboard's: with it in play (player 1 on auto, keyboard or all) */
+        if (g_mouse_cap && g_map.mouse && kb && focused) {
+            mouse_apply(&m);
+        }
         s.buttons = m.buttons;
         memcpy(s.analog, m.analog, sizeof(s.analog));
         s.lx = m.lx;
@@ -663,13 +849,25 @@ static void update_pads(bool focused)
         nc_pad_rumble(i, &l, &r);
         if (!g_map.rumble) {
             l = r = 0;
+        } else if (g_map.rumble_scale < 0.999f) {
+            l = (uint16_t)(l * g_map.rumble_scale);
+            r = (uint16_t)(r * g_map.rumble_scale);
         }
-        if (pad && (l != g_rumble[i][0] || r != g_rumble[i][1])) {
-            SDL_RumbleGamepad(pad, l, r, l || r ? 1000 : 0);
+        if ((pad || all) && (l != g_rumble[i][0] || r != g_rumble[i][1])) {
+            if (all) {
+                for (int k = 0; k < 4; k++) {
+                    if (g_pads[k]) {
+                        SDL_RumbleGamepad(g_pads[k], l, r, l || r ? 1000 : 0);
+                    }
+                }
+            } else {
+                SDL_RumbleGamepad(pad, l, r, l || r ? 1000 : 0);
+            }
             g_rumble[i][0] = l;
             g_rumble[i][1] = r;
         }
     }
+    quick_buttons();
 }
 
 /* ------------------------------------------------------------ states */
@@ -1156,6 +1354,7 @@ static void ingame_menu(SDL_Window *win, bool *paused, bool minimized)
     if (SDL_GetAtomicInt(&g_core_state) != 1) {
         return;
     }
+    mouse_release(win);
     nc_kernel_set_paused(&g_core.kernel, true);
     nc_audio_set_paused(true);
     int slot = 0;
@@ -1797,8 +1996,29 @@ int main(int argc, char *argv[])
             case SDL_EVENT_QUIT:
                 quit = true;
                 break;
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                /* a click on the game takes the mouse, when it is set to be a stick */
+                if (g_map.mouse && !g_mouse_cap && focused && !minimized) {
+                    mouse_capture(win);
+                }
+                break;
+            case SDL_EVENT_MOUSE_MOTION:
+                if (g_mouse_cap) {
+                    g_mouse_dx += ev.motion.xrel;
+                    g_mouse_dy += ev.motion.yrel;
+                }
+                break;
+            case SDL_EVENT_MOUSE_WHEEL:
+                if (g_mouse_cap && ev.wheel.y != 0) {
+                    g_wheel_until[ev.wheel.y > 0 ? 0 : 1] = SDL_GetTicks() + 120;
+                }
+                break;
             case SDL_EVENT_KEY_DOWN: {
                 if (ev.key.repeat) {
+                    break;
+                }
+                if (g_mouse_cap && (ev.key.key == SDLK_F3 || ev.key.key == SDLK_ESCAPE)) {
+                    mouse_release(win);     /* F3 or Esc lets go */
                     break;
                 }
                 /* the shortcuts (Settings > Shortcuts): the key with the
@@ -1914,6 +2134,7 @@ int main(int argc, char *argv[])
                 break;
             case SDL_EVENT_WINDOW_FOCUS_LOST:
                 focused = false;
+                mouse_release(win);
                 if (g_mute_bg) {
                     nc_audio_set_volume(0);
                 }

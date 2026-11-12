@@ -111,6 +111,52 @@ static void rows_language(List *l)
     }
 }
 
+/* ---- the mouse's and the quick save's rows, on the global Controls tab and a game's own controls */
+static void rows_mouse(List *l)
+{
+    const char *dev = cfg_get(&D.global, "pad.p1");
+    const bool all = dev && !strcmp(dev, "all");         /* "keyboard, mouse and controllers": the mouse is on */
+    opt_bool(l, S_MOUSE_STICK, "mouse", all, false);
+    const Config *c = D.editing_game ? &D.game : &D.global;
+    const char *on = cfg_get(c, "mouse");
+    const char *gon = cfg_get(&D.global, "mouse");
+    const bool shown = on ? strcmp(on, "0") != 0 : (!D.editing_game ? all : (gon ? strcmp(gon, "0") != 0 : all));
+    if (!shown) {
+        return;
+    }
+    static const char *const sv[] = {"right", "left"};
+    const char *sn[] = {T(S_IN_RSTICK), T(S_IN_LSTICK)};
+    opt_choice(l, S_MOUSE_MOVES, "mouse.stick", sv, sn, 2, "right");
+    opt_int(l, S_MOUSE_SENS, "mouse.sens", 25, 300, 25, 100, "%");
+    opt_bool(l, S_MOUSE_INVERT, "mouse.invert", false, false);
+    static const enum UiStr lab[IM_MOUSE_BTNS] = {S_MOUSE_B0, S_MOUSE_B1, S_MOUSE_B2, S_MOUSE_B3,
+                                                  S_MOUSE_B4, S_MOUSE_B5, S_MOUSE_B6};
+    static const char *tv[IM_MOUSE_TARGETS];
+    static char tvb[IM_MOUSE_TARGETS][4];
+    const char *tn[IM_MOUSE_TARGETS];
+    for (int t = 0; t < IM_MOUSE_TARGETS; t++) {
+        snprintf(tvb[t], sizeof(tvb[t]), "%d", t);
+        tv[t] = tvb[t];
+        tn[t] = t == 0 ? T(S_NONE) : im_mouse_target_label(t);
+    }
+    for (int b = 0; b < IM_MOUSE_BTNS; b++) {
+        static char key[IM_MOUSE_BTNS][12];
+        static char def[IM_MOUSE_BTNS][4];
+        snprintf(key[b], sizeof(key[b]), "mouse.b%d", b);
+        snprintf(def[b], sizeof(def[b]), "%d", im_mouse_btn_default(b));
+        opt_choice(l, lab[b], key[b], tv, tn, IM_MOUSE_TARGETS, def[b]);
+    }
+}
+
+static void rows_quick(List *l)
+{
+    opt_int(l, S_RUMBLE_STR, "rumble.str", 0, 100, 10, 100, "%");
+    opt_bool(l, S_QUICK_BTN, "quick.btn", true, false);
+    static const char *const qv[] = {"bumpers", "triggers", "sticks", "dpad"};
+    const char *qn[] = {"LB / RB", "LT / RT", "L3 / R3 (stick clicks)", "D-pad left / right"};
+    opt_choice(l, S_QUICK_COMBO, "quick.combo", qv, qn, 4, "bumpers");
+}
+
 static void rows_console(List *l)
 {
     rows_language(l);
@@ -365,6 +411,12 @@ void scr_settings(void)
             }
         }
         opt_bool(&l, S_RUMBLE, "rumble", true, false);
+        rows_quick(&l);
+        rows_mouse(&l);
+        if (list_row(&l, T(S_WASD_LAYOUT), NULL, NULL)) {
+            im_apply_wasd_mouse(&D.global);
+            dash_toast(T(S_WASD_DONE));
+        }
         break;
     case 5:
         /* the keyboard's (a key, Ctrl/Alt/Shift with it if held), then the
@@ -1127,6 +1179,35 @@ void scr_controls(void)
             if (list_selected(&l) && D.in.x) {
                 im_unbind(c, D.player, i);
             }
+        }
+        {
+            /* the keys for a kind of game: the suggestion for this game first; left and right choose,
+             * A sets them */
+            static int sel;
+            const char *sug = D.editing_game && D.cur ? D.cur->g.title : NULL;
+            const int suggested = sug ? im_preset_suggest(sug) : IM_PRESET_NONE;
+            const int n = IM_PRESETS;
+            int delta = 0;
+            if (sel < 0 || sel >= n) {
+                sel = 0;
+            }
+            int shown = (sel == 0 && suggested) ? suggested : sel;
+            char val[160];
+            if (sel == 0 && suggested) {
+                snprintf(val, sizeof(val), "%s: %s", T(S_LAYOUT_SUGGEST), im_preset_label(suggested));
+            } else {
+                snprintf(val, sizeof(val), "%s", im_preset_label(shown));
+            }
+            if (list_row(&l, T(S_LAYOUT_PRESET), val, &delta)) {
+                im_apply_preset(c, D.player, shown);
+                dash_toast(T(S_LAYOUT_SET));
+            }
+            if (delta) {
+                sel = (sel + delta + n) % n;
+            }
+        }
+        if (D.player == 0) {
+            rows_mouse(&l);
         }
         if (list_row(&l, T(S_RESET_DEFAULTS), NULL, NULL)) {
             im_clear_map(c, D.player);

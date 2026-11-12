@@ -207,6 +207,9 @@ static int device_of(const Config *c, int player)
     if (!strcmp(v, "keyboard")) {
         return -1;
     }
+    if (!strcmp(v, "all")) {
+        return -3;
+    }
     return !strncmp(v, "pad", 3) ? atoi(v + 3) : 0;
 }
 
@@ -215,6 +218,8 @@ void im_device_name(const Config *c, int player, char *out, size_t n)
     const int d = device_of(c, player);
     if (d == -2) {
         snprintf(out, n, "%s", T(S_NONE));
+    } else if (d == -3) {
+        snprintf(out, n, "%s", T(S_DEV_ALL));
     } else if (d == -1) {
         snprintf(out, n, "%s", T(S_KEYBOARD));
     } else if (d == 0) {
@@ -232,10 +237,10 @@ void im_cycle_device(Config *c, int player, int delta)
 {
     int cnt = 0;
     SDL_free(SDL_GetGamepads(&cnt));
-    /* auto, keyboard, pad1..padN, none */
-    const int slots = cnt + 3;
+    /* auto, keyboard, keyboard + mouse + controllers, pad1..padN, none */
+    const int slots = cnt + 4;
     const int d = device_of(c, player);
-    int pos = d == 0 ? 0 : d == -1 ? 1 : d == -2 ? slots - 1 : 1 + d;
+    int pos = d == 0 ? 0 : d == -1 ? 1 : d == -3 ? 2 : d == -2 ? slots - 1 : 2 + d;
     pos = (pos + delta + slots) % slots;
     char k[16], v[16];
     snprintf(k, sizeof(k), "pad.p%d", player + 1);
@@ -243,10 +248,12 @@ void im_cycle_device(Config *c, int player, int delta)
         snprintf(v, sizeof(v), "auto");
     } else if (pos == 1) {
         snprintf(v, sizeof(v), "keyboard");
+    } else if (pos == 2) {
+        snprintf(v, sizeof(v), "all");
     } else if (pos == slots - 1) {
         snprintf(v, sizeof(v), "none");
     } else {
-        snprintf(v, sizeof(v), "pad%d", pos - 1);
+        snprintf(v, sizeof(v), "pad%d", pos - 2);
     }
     cfg_set(c, k, v);
 }
@@ -388,6 +395,30 @@ void im_resolve(ImMap *m, const Config *global, const Config *game)
     const Config *tf = game && cfg_get(game, "trigger.full") ? game : global;
     m->trigger_full = cfg_int(tf, "trigger.full", 100) / 100.0f;
     m->rumble = cfg_bool(global, "rumble", true);
+    m->rumble_scale = cfg_int(global, "rumble.str", 100) / 100.0f;
+    m->quick = cfg_bool(global, "quick.btn", true);
+    {
+        const char *q = cfg_get(global, "quick.combo");
+        m->quick_combo = !q ? 0 : !strcmp(q, "triggers") ? 1 : !strcmp(q, "sticks") ? 2 : !strcmp(q, "dpad") ? 3 : 0;
+    }
+    /* the mouse: the game's own settings where its controls are its own, the global ones otherwise */
+    const Config *mc[2] = {custom ? game : global, global};
+#define MOUSE_CFG(key) (cfg_get(mc[0], key) ? mc[0] : mc[1])
+    m->mouse = cfg_bool(MOUSE_CFG("mouse"), "mouse", false);
+    {
+        const char *s = cfg_get(MOUSE_CFG("mouse.stick"), "mouse.stick");
+        m->mouse_stick = s && !strcmp(s, "left");
+    }
+    m->mouse_sens = cfg_int(MOUSE_CFG("mouse.sens"), "mouse.sens", 100) / 100.0f;
+    m->mouse_sens = m->mouse_sens < 0.25f ? 0.25f : m->mouse_sens > 3.0f ? 3.0f : m->mouse_sens;
+    m->mouse_invert = cfg_bool(MOUSE_CFG("mouse.invert"), "mouse.invert", false);
+    for (int i = 0; i < IM_MOUSE_BTNS; i++) {
+        char k[16];
+        snprintf(k, sizeof(k), "mouse.b%d", i);
+        const int t = cfg_int(MOUSE_CFG(k), k, im_mouse_btn_default(i));
+        m->mouse_btn[i] = t < 0 || t >= IM_MOUSE_TARGETS ? 0 : t;
+    }
+#undef MOUSE_CFG
 }
 
 static float pad_value(SDL_Gamepad *g, int pad)
@@ -486,4 +517,167 @@ void im_read(const ImMap *m, int p, const bool *keys, SDL_Gamepad *pad, ImPad *o
     }
     stick(m, v[IM_LRIGHT], v[IM_LLEFT], v[IM_LUP], v[IM_LDOWN], &out->lx, &out->ly);
     stick(m, v[IM_RRIGHT], v[IM_RLEFT], v[IM_RUP], v[IM_RDOWN], &out->rx, &out->ry);
+}
+
+/* ------------------------------------------------------------ the mouse and the layouts */
+
+const char *im_mouse_button_label(int i)
+{
+    static const char *const n[IM_MOUSE_BTNS] = {"Left click", "Right click", "Middle click", "Side button 1",
+                                                 "Side button 2", "Wheel up", "Wheel down"};
+    return n[i < 0 ? 0 : i >= IM_MOUSE_BTNS ? IM_MOUSE_BTNS - 1 : i];
+}
+
+const char *im_mouse_target_label(int t)
+{
+    static const char *const n[IM_MOUSE_TARGETS] = {"Nothing", "A", "B", "X", "Y", "Back", "Start", "Left stick (click)",
+                                                    "Right stick (click)", "White", "Black", "D-pad up", "D-pad down",
+                                                    "D-pad left", "D-pad right", "Left trigger", "Right trigger"};
+    return n[t < 0 ? 0 : t >= IM_MOUSE_TARGETS ? 0 : t];
+}
+
+/* Left click is the right trigger, right click the left, middle the right stick's click (the shooters') */
+int im_mouse_btn_default(int i)
+{
+    static const int d[IM_MOUSE_BTNS] = {16, 15, 8, 0, 0, 0, 0};
+    return d[i < 0 || i >= IM_MOUSE_BTNS ? 0 : i];
+}
+
+const char *im_preset_label(int preset)
+{
+    switch (preset) {
+    case IM_PRESET_SHOOTER: return "Shooter or action (WASD + mouse)";
+    case IM_PRESET_RACING: return "Racing";
+    case IM_PRESET_FIGHTING: return "Fighting";
+    case IM_PRESET_KEYBOARD: return "Sports and platformers (keyboard only)";
+    default: return "xbased's own keys";
+    }
+}
+
+/* The layouts as keys by input (SDL scancodes: A=4 .. Z=29, 1-4 = 30-33, Return 40, Backspace 42, Tab 43,
+ * Space 44, arrows right 79 left 80 down 81 up 82, Left Shift 225). */
+static void preset_keys(int preset, int sc[IM_INPUTS], bool *mouse)
+{
+    memset(sc, 0, IM_INPUTS * sizeof(int));
+    *mouse = false;
+    /* the keyboard's defaults to start from, as scancodes */
+    for (int i = 0; i < IM_INPUTS; i++) {
+        sc[i] = k_kb_def[i] ? (int)SDL_GetScancodeFromKey(k_kb_def[i], NULL) : 0;
+    }
+    int *k = sc;
+    switch (preset) {
+    case IM_PRESET_SHOOTER:
+        k[IM_A] = 44; k[IM_B] = 8; k[IM_X] = 21; k[IM_Y] = 20;      /* Space E R Q */
+        k[IM_BACK] = 42; k[IM_START] = 40;                          /* Backspace Return (Tab is the turbo hotkey) */
+        k[IM_LS] = 225; k[IM_RS] = 25;                              /* Left Shift, V */
+        k[IM_WHITE] = 10; k[IM_BLACK] = 9;                          /* G F */
+        k[IM_DUP] = 30; k[IM_DDOWN] = 31; k[IM_DLEFT] = 32; k[IM_DRIGHT] = 33;   /* 1-4 */
+        k[IM_LUP] = 26; k[IM_LLEFT] = 4; k[IM_LRIGHT] = 7; k[IM_LDOWN] = 22;     /* W A D S */
+        k[IM_LT] = 29; k[IM_RT] = 27;                               /* Z X */
+        k[IM_RUP] = 82; k[IM_RLEFT] = 80; k[IM_RRIGHT] = 79; k[IM_RDOWN] = 81;   /* arrows */
+        *mouse = true;
+        break;
+    case IM_PRESET_RACING:      /* A / D steer, W gas, S brake */
+        k[IM_LUP] = 0; k[IM_LDOWN] = 0; k[IM_LLEFT] = 4; k[IM_LRIGHT] = 7;
+        k[IM_RT] = 26; k[IM_LT] = 22;
+        k[IM_A] = 44; k[IM_B] = 5; k[IM_X] = 27; k[IM_Y] = 28;
+        k[IM_WHITE] = 20; k[IM_BLACK] = 8;                          /* Q E: shift down, up */
+        k[IM_START] = 40; k[IM_BACK] = 42;
+        k[IM_RUP] = 82; k[IM_RLEFT] = 80; k[IM_RRIGHT] = 79; k[IM_RDOWN] = 81;
+        k[IM_DUP] = 30; k[IM_DDOWN] = 31; k[IM_DLEFT] = 32; k[IM_DRIGHT] = 33;
+        k[IM_LS] = 225; k[IM_RS] = 25;
+        break;
+    case IM_PRESET_FIGHTING:    /* the d-pad on WASD, the buttons on the right hand */
+        k[IM_DUP] = 26; k[IM_DLEFT] = 4; k[IM_DRIGHT] = 7; k[IM_DDOWN] = 22;
+        k[IM_A] = 13; k[IM_B] = 14; k[IM_X] = 24; k[IM_Y] = 12;     /* J K U I */
+        k[IM_WHITE] = 18; k[IM_BLACK] = 15;                         /* O L */
+        k[IM_LT] = 20; k[IM_RT] = 8;                                /* Q E */
+        k[IM_LUP] = 82; k[IM_LLEFT] = 80; k[IM_LRIGHT] = 79; k[IM_LDOWN] = 81;
+        k[IM_RUP] = k[IM_RLEFT] = k[IM_RRIGHT] = k[IM_RDOWN] = 0;
+        k[IM_START] = 40; k[IM_BACK] = 42;
+        break;
+    case IM_PRESET_KEYBOARD:    /* arrows and Z X C V */
+        k[IM_LUP] = 82; k[IM_LLEFT] = 80; k[IM_LRIGHT] = 79; k[IM_LDOWN] = 81;
+        k[IM_A] = 29; k[IM_B] = 27; k[IM_X] = 6; k[IM_Y] = 25;
+        k[IM_WHITE] = 4; k[IM_BLACK] = 22;                          /* A S */
+        k[IM_LT] = 20; k[IM_RT] = 8;                                /* Q E */
+        k[IM_DUP] = 30; k[IM_DDOWN] = 31; k[IM_DLEFT] = 32; k[IM_DRIGHT] = 33;
+        k[IM_LS] = 225; k[IM_RS] = 0;
+        k[IM_START] = 40; k[IM_BACK] = 42;
+        k[IM_RUP] = 12; k[IM_RLEFT] = 13; k[IM_RRIGHT] = 15; k[IM_RDOWN] = 14;   /* I J L K */
+        break;
+    default:
+        break;
+    }
+}
+
+void im_apply_preset(Config *c, int player, int preset)
+{
+    if (preset == IM_PRESET_NONE) {
+        im_clear_map(c, player);
+        return;
+    }
+    int sc[IM_INPUTS];
+    bool mouse;
+    preset_keys(preset, sc, &mouse);
+    for (int i = 0; i < IM_INPUTS; i++) {
+        SDL_Keycode k;
+        int p;
+        parse(c, player, i, &k, &p);
+        store(c, player, i, sc[i] > 0 ? SDL_GetKeyFromScancode((SDL_Scancode)sc[i], SDL_KMOD_NONE, false) : SDLK_UNKNOWN, p);
+    }
+    if (player == 0) {
+        cfg_set(c, "mouse", mouse ? "1" : "0");
+        if (mouse) {
+            cfg_set(c, "mouse.stick", "right");
+        }
+    }
+}
+
+void im_apply_wasd_mouse(Config *c)
+{
+    im_apply_preset(c, 0, IM_PRESET_SHOOTER);
+    /* the keyboard has to be in play for player 1: on auto and keyboard it is already */
+    const int d = device_of(c, 0);
+    if (d > 0 || d == -2) {
+        cfg_set(c, "pad.p1", "all");
+    }
+}
+
+static bool has_any(const char *n, const char *const *w)
+{
+    for (; *w; w++) {
+        if (strstr(n, *w)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+int im_preset_suggest(const char *title)
+{
+    char n[160];
+    size_t i = 0;
+    for (; title && title[i] && i < sizeof(n) - 1; i++) {
+        n[i] = (char)((title[i] >= 'A' && title[i] <= 'Z') ? title[i] + 32 : title[i]);
+    }
+    n[i] = 0;
+    static const char *const racing[] = {"forza", "project gotham", "burnout", "need for speed", "midtown madness",
+        "rallisport", "colin mcrae", "outrun", "out run", "toca ", "midnight club", "wreckless", "flatout", "juiced",
+        "racing", "rally", "motogp", "moto gp", "mx unleashed", "mx vs", "atv ", "crash 'n' burn", "test drive",
+        "sega gt", "rpm tuning", "pro race driver", NULL};
+    static const char *const fighting[] = {"soulcalibur", "soul calibur", "dead or alive", "mortal kombat",
+        "virtua fighter", "tekken", "street fighter", "ultimate fighting", "smackdown", "def jam", "fight night",
+        "wrestle", "wwe", "tao feng", "kakuto", "capcom vs", "king of fighters", NULL};
+    static const char *const shooter[] = {"halo", "doom", "quake", "unreal", "half-life", "far cry", "counter-strike",
+        "brothers in arms", "call of duty", "medal of honor", "ghost recon", "rainbow six", "timesplitters",
+        "red faction", "turok", "goldeneye", "battlefront", "republic commando", "perfect dark", "condemned",
+        "splinter cell", "ninja gaiden", "chronicles of riddick", "mercenaries", "crimson skies", "armed and dangerous",
+        "psi-ops", "conflict: ", "area 51", "blood rayne", "bloodrayne", "painkiller", "project snowblind",
+        "wolfenstein", "tom clancy", NULL};
+    static const char *const sports[] = {"madden", "nba ", "nhl ", "fifa", "mlb", "tennis", "golf", "tiger woods",
+        "ssx", "tony hawk", "amped", "pro evolution", "pes ", "sonic", "crash ", "spyro", "jet set radio", "rayman",
+        "sly cooper", "kung fu chaos", "lego", "shrek", "spongebob", NULL};
+    return has_any(n, racing) ? IM_PRESET_RACING : has_any(n, fighting) ? IM_PRESET_FIGHTING
+           : has_any(n, shooter) ? IM_PRESET_SHOOTER : has_any(n, sports) ? IM_PRESET_KEYBOARD : IM_PRESET_NONE;
 }

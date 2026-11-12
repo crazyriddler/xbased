@@ -58,11 +58,26 @@ const char *im_hkpad_value(int i);          /* "none", "guide", "guide+a", ... *
 const char *im_hkpad_label(int i);          /* "Guide + A" */
 const char *im_hkpad_default(int h);
 
+/* the mouse's buttons and what they can be; the layouts (keys for the kinds of game) */
+#define IM_MOUSE_BTNS 7
+#define IM_MOUSE_TARGETS 17
+const char *im_mouse_button_label(int i);
+const char *im_mouse_target_label(int t);
+int im_mouse_btn_default(int i);
+enum { IM_PRESET_NONE, IM_PRESET_SHOOTER, IM_PRESET_RACING, IM_PRESET_FIGHTING, IM_PRESET_KEYBOARD, IM_PRESETS };
+const char *im_preset_label(int preset);
+/* A guess at the layout a game wants, from its title (IM_PRESET_NONE: no idea). */
+int im_preset_suggest(const char *title);
+/* Player p's keys set to the layout (the pad's buttons stay); the mouse on or off with it. */
+void im_apply_preset(Config *c, int player, int preset);
+/* Player 1 on the keyboard and mouse, WASD: the shooter layout, the mouse on, the keyboard in play. */
+void im_apply_wasd_mouse(Config *c);
+
 /* the game: the mapping resolved (the game's file over the global one) */
 typedef struct ImMap {
     SDL_Keycode key[4][IM_INPUTS];
     int pad[4][IM_INPUTS];      /* 0 none; 1 + button; 1000 + axis * 2 + (negative) */
-    int device[4];              /* -2 none, -1 keyboard only, 0 auto, k: the k-th gamepad */
+    int device[4];              /* -3 keyboard, mouse and every controller, -2 none, -1 keyboard only, 0 auto, k: the k-th gamepad */
     SDL_Keycode hotkey[IM_HOTKEYS];
     uint8_t hk_mod[IM_HOTKEYS];     /* 1 Ctrl, 2 Alt, 4 Shift: held with the key */
     int hk_pad[IM_HOTKEYS];         /* IM_HKP_* */
@@ -73,6 +88,17 @@ typedef struct ImMap {
     float trigger_dz;           /* trigger.deadzone: travel ignored at the start, 0..1 */
     float trigger_full;         /* trigger.full: the travel that is already a full press */
     bool rumble;
+    float rumble_scale;         /* rumble.str: every controller's rumble, 0..1 */
+    /* Back held with a button: a quick save (left one) and a quick load (right one) */
+    bool quick;                 /* quick.btn */
+    int quick_combo;            /* quick.combo: 0 bumpers, 1 triggers, 2 stick clicks, 3 d-pad left/right */
+    /* the mouse as a stick, and its buttons as the pad's (targets: 0 nothing, 1 A, 2 B, 3 X, 4 Y, 5 Back,
+     * 6 Start, 7 LS, 8 RS, 9 White, 10 Black, 11-14 d-pad up/down/left/right, 15 LT, 16 RT) */
+    bool mouse;                 /* mouse */
+    int mouse_stick;            /* mouse.stick: 0 right, 1 left */
+    float mouse_sens;           /* mouse.sens: 0.25..3 */
+    bool mouse_invert;          /* mouse.invert */
+    int mouse_btn[7];           /* mouse.b0..b6: left, right, middle, side 1, side 2, wheel up, wheel down */
 } ImMap;
 void im_resolve(ImMap *m, const Config *global, const Config *game);
 /* A stick's position (x, y: -1..1, up positive) as the title gets it,
