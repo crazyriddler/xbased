@@ -2545,6 +2545,7 @@ int dash_run(SDL_Window *win, const char *exe)
         case SCR_ABOUT: scr_about(); break;
         case SCR_BROWSE: scr_browse(); break;
         case SCR_FIND: scr_find(); break;
+        case SCR_INSIGNIA: scr_insignia(); break;
         default: break;
         }
         ui_layer_end();

@@ -1569,6 +1569,11 @@ void scr_online(void)
         SDL_OpenURL(site);
     }
     if (net && !strcmp(net, "nat")) {
+        /* its status, the steps to get online and the library's games that play on it */
+        if (list_row(&l, T(S_INSIGNIA), ">", NULL)) {
+            D.sel[SCR_INSIGNIA] = D.scroll[SCR_INSIGNIA] = 0;
+            dash_push(SCR_INSIGNIA);
+        }
         /* Insignia's sign-up and the accounts: the Xbox dashboard's Xbox Live */
         if (list_row(&l, T(S_XBOX_DASH), dash_xbox_dashboard_installed() ? NULL : T(S_NOT_INSTALLED), NULL)) {
             dash_open_xbox_dashboard();

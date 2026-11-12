@@ -32,7 +32,7 @@ typedef struct In {
 enum Screen {
     SCR_MAIN, SCR_GAMES, SCR_GAME, SCR_GAME_SETTINGS, SCR_MODS, SCR_STATES, SCR_SETTINGS, SCR_CONTROLS,
     SCR_REMAP, SCR_MEMORY, SCR_MEMORY_TITLE, SCR_ONLINE, SCR_ABOUT, SCR_INGAME, SCR_INGAME_SLOTS, SCR_STICKS,
-    SCR_TRIGGERS, SCR_BROWSE, SCR_FIND, SCR_COUNT
+    SCR_TRIGGERS, SCR_BROWSE, SCR_FIND, SCR_INSIGNIA, SCR_COUNT
 };
 
 typedef struct Dash {
@@ -130,6 +130,7 @@ void scr_triggers(void);
 void scr_memory(void);
 void scr_memory_title(void);
 void scr_online(void);
+void scr_insignia(void);
 void scr_game_settings(void);
 void scr_mods(void);
 void scr_states(void);
