@@ -12,7 +12,8 @@ struct ANativeWindow;
 
 /* A frame smaller than its place in the window: scaled up bilinearly, or by
  * AMD FidelityFX Super Resolution 1 (a larger one is always averaged down). */
-enum { HLE_UPSCALE_BILINEAR, HLE_UPSCALE_FSR, HLE_UPSCALE_NEAREST };
+/* NIS: its sharpness (percent) in the bits above the kind (upscale >> 8) */
+enum { HLE_UPSCALE_BILINEAR, HLE_UPSCALE_FSR, HLE_UPSCALE_NEAREST, HLE_UPSCALE_NIS };
 
 /* This refresh would put up what win already shows (the same front frame,
  * gamma ramp, window and swapchain, and key: the caller's placement and

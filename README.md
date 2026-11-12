@@ -109,7 +109,7 @@ xbased doesn't include any copyrighted Xbox software.
 ### Picture
 - **Internal resolution** up to 8x, aspect ratio, widescreen and video modes.
 - **FXAA** and **anisotropic filtering** up to 16x.
-- **Upscaling**: bilinear or AMD FSR 1.
+- **Upscaling**: bilinear, nearest, AMD FSR 1 or NVIDIA Image Scaling (NIS, with a sharpness setting; MIT, see `licenses/nvidia-nis.license.txt`).
 - **CRT filters**: soft scanlines, a classic TV, an arcade monitor.
 - Every setting **global or per game**.
 

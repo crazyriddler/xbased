@@ -23,6 +23,7 @@ static int g_overscan;          /* percent: > 0 the edges cut off, < 0 a border 
 static int g_crop_h, g_crop_v;  /* console pixels off each side, off the top and bottom */
 static bool g_fxaa;
 static int g_upscale = NC_UPSCALE_BILINEAR;
+static int g_nis_sharp = 50;
 static bool g_shown;
 
 /* Frame rate from the HLE GPU's presented frames. */
@@ -48,6 +49,7 @@ int nc_upscale_from_name(const char *v)
 {
     return v && (!strcmp(v, "fsr") || !strcmp(v, "sgsr")) ? NC_UPSCALE_FSR
            : v && !strcmp(v, "nearest")                     ? NC_UPSCALE_NEAREST
+           : v && !strcmp(v, "nis")                         ? NC_UPSCALE_NIS
                                                             : NC_UPSCALE_BILINEAR;
 }
 
@@ -55,7 +57,7 @@ bool nc_present_init(void)
 {
     hle_disp_gamma_by_consumer(true); /* before the core starts: frames come without it */
     nc_log("hakuX-app", "present: Vulkan; FXAA %s, upscaling %s", g_fxaa ? "on" : "off",
-           g_upscale == NC_UPSCALE_FSR ? "FSR" : g_upscale == NC_UPSCALE_NEAREST ? "nearest" : "bilinear");
+           g_upscale == NC_UPSCALE_FSR ? "FSR" : g_upscale == NC_UPSCALE_NIS ? "NIS" : g_upscale == NC_UPSCALE_NEAREST ? "nearest" : "bilinear");
     return true;
 }
 
@@ -67,6 +69,11 @@ void nc_present_set_fxaa(bool on)
 void nc_present_set_upscale(int mode)
 {
     g_upscale = mode;
+}
+
+void nc_present_set_nis_sharpness(int pct)
+{
+    g_nis_sharp = pct < 0 ? 0 : pct > 100 ? 100 : pct;
 }
 
 void nc_present_set_aspect(int mode)
@@ -292,7 +299,7 @@ bool nc_present_frame(struct ANativeWindow *win)
     const uint64_t key = (uint64_t)fxaa | (uint64_t)upscale << 1 | (uint64_t)g_dbg.average << 4 |
                          (uint64_t)g_widescreen << 5 | (uint64_t)(uint32_t)g_aspect << 8 |
                          (uint64_t)(uint32_t)(g_overscan + 64) << 16 | (uint64_t)(uint32_t)g_crop_h << 24 |
-                         (uint64_t)(uint32_t)g_crop_v << 32;
+                         (uint64_t)(uint32_t)g_crop_v << 32 | (uint64_t)(uint32_t)g_nis_sharp << 40;
 #ifdef NC_DESKTOP
     const bool as_they_come = !nc_dev_nv2a_vblank_locked() || nc_dev_nv2a_vblank_timed();
 #else
@@ -327,6 +334,6 @@ bool nc_present_frame(struct ANativeWindow *win)
         __atomic_store_n(&g_shown, true, __ATOMIC_RELAXED);
     }
     hle_present_set_osd(g_show_fps ? (g_fps > 0 ? g_fps : 0.01f) : 0);
-    hle_present_end(sx, sy, fxaa, upscale, g_dbg.average, key);
+    hle_present_end(sx, sy, fxaa, upscale | (g_nis_sharp << 8), g_dbg.average, key);
     return true;
 }

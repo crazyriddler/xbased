@@ -62,9 +62,10 @@ static void rows_video(List *l)
     static const char *anv[] = {"0", "2", "4", "8", "16"};
     const char *ann[] = {T(S_OFF), "2x", "4x", "8x", "16x"};
     opt_choice(l, S_ANISO, "aniso", anv, ann, 5, "0");
-    static const char *uv[] = {"bilinear", "fsr", "nearest"};
-    const char *un[] = {T(S_BILINEAR), "AMD FSR 1", T(S_NEAREST)};
-    opt_choice(l, S_UPSCALE, "upscale", uv, un, 3, "bilinear");
+    static const char *uv[] = {"bilinear", "fsr", "nis", "nearest"};
+    const char *un[] = {T(S_BILINEAR), "AMD FSR 1", "NVIDIA NIS", T(S_NEAREST)};
+    opt_choice(l, S_UPSCALE, "upscale", uv, un, 4, "bilinear");
+    opt_int(l, S_NIS_SHARP, "nis.sharp", 0, 100, 5, 50, "%");
     static const char *cv[] = {"0", "1", "2", "3"};
     const char *cn[] = {T(S_OFF), T(S_CRT_SOFT), T(S_CRT_TV), T(S_CRT_ARCADE)};
     opt_choice(l, S_CRT, "crt", cv, cn, 4, "0");

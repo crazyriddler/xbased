@@ -1103,6 +1103,9 @@ static void apply_cfg(const Config *global, const Config *game, bool sound)
         if ((v = cfg_get(c, "upscale"))) {
             nc_present_set_upscale(nc_upscale_from_name(v));
         }
+        if ((v = cfg_get(c, "nis.sharp"))) {
+            nc_present_set_nis_sharpness(atoi(v));
+        }
         if ((v = cfg_get(c, "crt"))) {
             hle_present_set_crt(atoi(v));
         }
@@ -1645,6 +1648,8 @@ int main(int argc, char *argv[])
             nc_present_set_fxaa(atoi(a + 5) != 0);
         } else if (!strncmp(a, "upscale=", 8)) {
             nc_present_set_upscale(nc_upscale_from_name(a + 8));
+        } else if (!strncmp(a, "nis.sharp=", 10)) {
+            nc_present_set_nis_sharpness(atoi(a + 10));
         } else if (!strncmp(a, "crt=", 4)) {
             hle_present_set_crt(atoi(a + 4));
         } else if (!strncmp(a, "vsync=", 6)) {

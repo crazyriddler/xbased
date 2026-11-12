@@ -39,8 +39,10 @@ void nc_present_set_fxaa(bool on);
 void nc_present_set_show_fps(bool on);
 /* A frame smaller than its place in the window: scaled up bilinearly, or by
  * AMD FidelityFX Super Resolution 1 (a larger one is always averaged down). */
-enum { NC_UPSCALE_BILINEAR, NC_UPSCALE_FSR, NC_UPSCALE_NEAREST };    /* swapchain.h HLE_UPSCALE_*'s */
+enum { NC_UPSCALE_BILINEAR, NC_UPSCALE_FSR, NC_UPSCALE_NEAREST, NC_UPSCALE_NIS };    /* swapchain.h HLE_UPSCALE_*'s */
 void nc_present_set_upscale(int mode);
+/* NVIDIA Image Scaling's sharpness, 0-100 percent (50: its default). */
+void nc_present_set_nis_sharpness(int pct);
 /* An "upscale=" value: "fsr", and "sgsr" (Snapdragon GSR, which FSR
  * replaced) as FSR; anything else bilinear. */
 int nc_upscale_from_name(const char *v);
