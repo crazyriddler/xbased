@@ -34,6 +34,22 @@ if(WIN32)
   # the linker's map: the profile's offsets resolved where there is no debug info (HAKUX_PROF)
   target_link_options(hakux PRIVATE "-Wl,-Map=$<TARGET_FILE_DIR:hakux>/xbased.map")
   target_link_libraries(hakux PRIVATE ole32 uuid shell32 mpr)   # the desktop shortcuts (app/ui/shortcut.c); mpr: a network drive's share (dash_browse.c)
+elseif(APPLE)
+  set(NC_ICNS "${CMAKE_BINARY_DIR}/xbased.icns")
+  add_custom_command(OUTPUT "${NC_ICNS}"
+    COMMAND "${CMAKE_COMMAND}" -DSRC=${CMAKE_CURRENT_SOURCE_DIR}/app/win/icon256.png -DOUT=${NC_ICNS}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/macos_icns.cmake"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/app/win/icon256.png" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/macos_icns.cmake"
+    VERBATIM)
+  set_source_files_properties("${NC_ICNS}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+  add_executable(hakux MACOSX_BUNDLE ${NC_APP_SOURCES} "${NC_ICNS}")
+  file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/app/win_main.c" nc_ver REGEX "^#define XBASED_VERSION ")
+  string(REGEX REPLACE ".*\"([0-9.]+)\".*" "\\1" nc_ver "${nc_ver}")
+  set_target_properties(hakux PROPERTIES
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/app/mac/Info.plist.in"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "io.github.crazyriddler.xbased"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${nc_ver}"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${nc_ver}")
 else()
   add_executable(hakux ${NC_APP_SOURCES})
 endif()
@@ -44,7 +60,23 @@ target_include_directories(hakux PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../third_par
 target_compile_options(hakux PRIVATE -Wall -Wno-unused-parameter -Wno-unused-function)
 # the mods and cheats the game folders hold (mods/README.md), and the
 # dashboard's fonts, beside the executable
-add_custom_command(TARGET hakux POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_directory "${NC_REPO}/mods" "$<TARGET_FILE_DIR:hakux>/mods"
-  COMMAND ${CMAKE_COMMAND} -E copy_directory "${NC_REPO}/cheats" "$<TARGET_FILE_DIR:hakux>/cheats"
-  COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/fonts" "$<TARGET_FILE_DIR:hakux>/fonts")
+if(APPLE)
+  set(nc_res "$<TARGET_BUNDLE_CONTENT_DIR:hakux>/Resources")
+  add_custom_command(TARGET hakux POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${NC_REPO}/mods" "${nc_res}/mods"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${NC_REPO}/cheats" "${nc_res}/cheats"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/fonts" "${nc_res}/fonts")
+  if(NC_MOLTENVK)
+    add_custom_command(TARGET hakux POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:hakux>/Frameworks"
+      COMMAND ${CMAKE_COMMAND} -E copy "${NC_MOLTENVK}" "$<TARGET_BUNDLE_CONTENT_DIR:hakux>/Frameworks/libMoltenVK.dylib")
+  endif()
+  add_custom_command(TARGET hakux POST_BUILD
+    COMMAND codesign --force --sign - --timestamp=none "$<TARGET_BUNDLE_DIR:hakux>"
+    COMMENT "Signing xbased.app (ad hoc)")
+else()
+  add_custom_command(TARGET hakux POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${NC_REPO}/mods" "$<TARGET_FILE_DIR:hakux>/mods"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${NC_REPO}/cheats" "$<TARGET_FILE_DIR:hakux>/cheats"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/fonts" "$<TARGET_FILE_DIR:hakux>/fonts")
+endif()
