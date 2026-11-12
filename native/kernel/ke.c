@@ -40,6 +40,7 @@ enum {
 #define PCR_IRQL         0x24
 
 #define WAIT_ALL 0
+#undef WAIT_ANY
 #define WAIT_ANY 1
 
 /* The Xbox's performance counter runs at the ACPI timer's 3.375 MHz. */
@@ -621,7 +622,7 @@ static void poll_spin(NcKernel *k)
  * negative relative, positive absolute system time, zero a poll). An
  * alertable wait runs the thread's queued APCs instead and returns
  * STATUS_USER_APC (apc.c). */
-static uint32_t wait(NcKernel *k, const uint32_t *objs, unsigned count, bool wait_all, uint32_t timeout_va,
+static uint32_t ke_wait(NcKernel *k, const uint32_t *objs, unsigned count, bool wait_all, uint32_t timeout_va,
                      uint32_t cs, bool alertable)
 {
     NcThread *t = k->current;
@@ -1096,7 +1097,7 @@ static uint64_t NtRemoveIoCompletion(NcKernel *k, NcFrame *f, const uint32_t *a)
     out[0] = a[1];
     out[1] = a[2];
     out[2] = a[3];
-    return wait(k, &obj, 1, false, a[4], 0, false);
+    return ke_wait(k, &obj, 1, false, a[4], 0, false);
 }
 
 /* NtSetIoCompletion(IoCompletionHandle, KeyContext, ApcContext, IoStatus, IoStatusInformation) */
@@ -1124,7 +1125,7 @@ static uint64_t NtQueryIoCompletion(NcKernel *k, NcFrame *f, const uint32_t *a)
 
 static uint64_t KeWaitForSingleObject(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
-    return wait(k, &a[0], 1, false, a[4], 0, a[3] & 0xff);
+    return ke_wait(k, &a[0], 1, false, a[4], 0, a[3] & 0xff);
 }
 
 /* KeWaitForMultipleObjects(Count, Object[], WaitType, WaitReason, WaitMode, Alertable,
@@ -1136,21 +1137,21 @@ static uint64_t KeWaitForMultipleObjects(NcKernel *k, NcFrame *f, const uint32_t
     for (unsigned i = 0; i < n; i++) {
         objs[i] = nc_vm_rd32(k->vm, a[1] + 4 * i);
     }
-    return wait(k, objs, n, a[2] == WAIT_ALL, a[6], 0, a[5] & 0xff);
+    return ke_wait(k, objs, n, a[2] == WAIT_ALL, a[6], 0, a[5] & 0xff);
 }
 
 /* NtWaitForSingleObject(Handle, Alertable, Timeout) */
 static uint64_t NtWaitForSingleObject(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
     uint32_t obj = handle_object(k, a[0]);
-    return obj ? wait(k, &obj, 1, false, a[2], 0, a[1] & 0xff) : NC_STATUS_INVALID_HANDLE;
+    return obj ? ke_wait(k, &obj, 1, false, a[2], 0, a[1] & 0xff) : NC_STATUS_INVALID_HANDLE;
 }
 
 /* NtWaitForSingleObjectEx(Handle, WaitMode, Alertable, Timeout) */
 static uint64_t NtWaitForSingleObjectEx(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
     uint32_t obj = handle_object(k, a[0]);
-    return obj ? wait(k, &obj, 1, false, a[3], 0, a[2] & 0xff) : NC_STATUS_INVALID_HANDLE;
+    return obj ? ke_wait(k, &obj, 1, false, a[3], 0, a[2] & 0xff) : NC_STATUS_INVALID_HANDLE;
 }
 
 /* NtSignalAndWaitForSingleObjectEx(SignalHandle, WaitHandle, WaitMode, Alertable, Timeout):
@@ -1180,7 +1181,7 @@ static uint64_t NtSignalAndWaitForSingleObjectEx(NcKernel *k, NcFrame *f, const 
         status = 0xC0000024u;   /* STATUS_OBJECT_TYPE_MISMATCH */
         break;
     }
-    return status == NC_STATUS_SUCCESS ? wait(k, &obj, 1, false, a[4], 0, a[3] & 0xff) : status;
+    return status == NC_STATUS_SUCCESS ? ke_wait(k, &obj, 1, false, a[4], 0, a[3] & 0xff) : status;
 }
 
 /* NtWaitForMultipleObjectsEx(Count, Handles, WaitType, WaitMode, Alertable, Timeout) */
@@ -1194,13 +1195,13 @@ static uint64_t NtWaitForMultipleObjectsEx(NcKernel *k, NcFrame *f, const uint32
             return NC_STATUS_INVALID_HANDLE;
         }
     }
-    return wait(k, objs, n, a[2] == WAIT_ALL, a[5], 0, a[4] & 0xff);
+    return ke_wait(k, objs, n, a[2] == WAIT_ALL, a[5], 0, a[4] & 0xff);
 }
 
 /* KeDelayExecutionThread(WaitMode, Alertable, Interval) */
 static uint64_t KeDelayExecutionThread(NcKernel *k, NcFrame *f, const uint32_t *a)
 {
-    const uint32_t st = wait(k, NULL, 0, false, a[2], 0, a[1] & 0xff);
+    const uint32_t st = ke_wait(k, NULL, 0, false, a[2], 0, a[1] & 0xff);
     NcThread *cur = k->current;
     if (cur && cur->state == NC_T_RUNNING && !k->redirected) {
         /* A delay that has nothing to wait for (Sleep(0), or one already
@@ -1277,7 +1278,7 @@ static uint64_t RtlEnterCriticalSection(NcKernel *k, NcFrame *f, const uint32_t 
     } else if (nc_vm_rd32(k->vm, cs + CS_OWNER) == me) {
         nc_vm_wr32(k->vm, cs + CS_RECURSION, nc_vm_rd32(k->vm, cs + CS_RECURSION) + 1);
     } else {
-        wait(k, &cs, 1, false, 0, cs, false); /* the event is at the start of the section */
+        ke_wait(k, &cs, 1, false, 0, cs, false); /* the event is at the start of the section */
     }
     return 0;
 }
@@ -1357,7 +1358,7 @@ static uint64_t ExAcquireReadWriteLockExclusive(NcKernel *k, NcFrame *f, const u
     if (nc_vm_rd32(k->vm, a[0] + RW_LOCK_COUNT) != 0) {
         rw_add(k, a[0] + RW_WRITERS_WAIT, 1);
         const uint32_t ev = a[0] + RW_WRITER_EVENT;
-        wait(k, &ev, 1, false, 0, 0, false);
+        ke_wait(k, &ev, 1, false, 0, 0, false);
     }
     return 0;
 }
@@ -1373,7 +1374,7 @@ static uint64_t ExAcquireReadWriteLockShared(NcKernel *k, NcFrame *f, const uint
     if (must_wait) {
         rw_add(k, a[0] + RW_READERS_WAIT, 1);
         const uint32_t sem = a[0] + RW_READER_SEM;
-        wait(k, &sem, 1, false, 0, 0, false);
+        ke_wait(k, &sem, 1, false, 0, 0, false);
     } else {
         rw_add(k, a[0] + RW_READERS_ENTRY, 1);
     }

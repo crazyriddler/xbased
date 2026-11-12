@@ -1011,6 +1011,11 @@ bool xi_find_toml(char *out, size_t n)
     if (app) {
         snprintf(c[k++], sizeof(c[0]), "%s\\xemu\\xemu\\xemu.toml", app);
     }
+#elif defined(__APPLE__)
+    const char *home = getenv("HOME");
+    if (home) {
+        snprintf(c[k++], sizeof(c[0]), "%s/Library/Application Support/xemu/xemu/xemu.toml", home);
+    }
 #else
     const char *xdg = getenv("XDG_DATA_HOME"), *home = getenv("HOME");
     if (xdg && *xdg) {

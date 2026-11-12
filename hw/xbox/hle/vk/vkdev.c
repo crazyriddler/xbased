@@ -283,8 +283,16 @@ int hle_vk_init(void)
         iexts[nix++] = NC_SURFACE_EXT;
     }
 #endif
+    VkInstanceCreateFlags iflags = 0;
+#ifdef __APPLE__
+    if (has_ext(iext, nie, VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+        iexts[nix++] = VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME;
+        iflags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+    }
+#endif
     VkInstanceCreateInfo ici = {
         .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .flags = iflags,
         .pApplicationInfo = &app,
         .enabledExtensionCount = nix, .ppEnabledExtensionNames = iexts,
     };
@@ -534,6 +542,9 @@ int hle_vk_init(void)
     c->bindless = ok_rda && ok_pb && ok_uab && ok_nui &&
                   l_img >= 3 * HLE_MAX_IMAGES && l_set_img >= 3 * HLE_MAX_IMAGES &&
                   l_smp >= HLE_MAX_SAMPLERS && l_set_smp >= HLE_MAX_SAMPLERS;
+    if (v13 && p12.driverID == VK_DRIVER_ID_MOLTENVK) {
+        c->bindless = false;
+    }
     need(c, v->props.limits.maxBoundDescriptorSets >= 4, "4 descriptor sets");
     if (v13) {                          /* both required of a 1.3 driver */
         need(c, q13.synchronization2, "synchronization2");
@@ -812,6 +823,11 @@ int hle_vk_init(void)
     if (c->share) {
         exts[nx++] = VK_KHR_EXTERNAL_MEMORY_WIN32_EXTENSION_NAME;
         exts[nx++] = VK_KHR_EXTERNAL_SEMAPHORE_WIN32_EXTENSION_NAME;
+    }
+#endif
+#ifdef __APPLE__
+    if (has_ext(ext, ne, VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME)) {
+        exts[nx++] = VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME;
     }
 #endif
     float prio = 1.0f;

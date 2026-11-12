@@ -4,6 +4,12 @@
 # line on the device (adb shell) for the frontier loop. Cross-compiled with
 # the NDK into build/native/core; the steps are in android/README.md.
 cmake_minimum_required(VERSION 3.20)
+if(CMAKE_HOST_APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
+  set(CMAKE_OSX_ARCHITECTURES x86_64 CACHE STRING "xbased's Mac build is x86-64 (Rosetta 2 on Apple silicon)")
+endif()
+if(CMAKE_HOST_APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+  set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0 CACHE STRING "the oldest macOS the Mac build runs on")
+endif()
 project(hakux_native C CXX)
 
 set(CMAKE_C_STANDARD 11)
@@ -19,7 +25,11 @@ if(HAKUX_LTO AND CMAKE_BUILD_TYPE STREQUAL "Release")
   check_ipo_supported(RESULT nc_ipo LANGUAGES C CXX)
   if(nc_ipo)
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
-    add_link_options("-Wl,--thinlto-cache-dir=${CMAKE_BINARY_DIR}/lto-cache")
+    if(APPLE)
+      add_link_options("-Wl,-cache_path_lto,${CMAKE_BINARY_DIR}/lto-cache")
+    else()
+      add_link_options("-Wl,--thinlto-cache-dir=${CMAKE_BINARY_DIR}/lto-cache")
+    endif()
   endif()
 endif()
 
@@ -29,8 +39,20 @@ get_filename_component(NC_REPO "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT ANDROID AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
   set(NC_LINUX_X64 ON)
 endif()
+if(APPLE)
+  if(NOT CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64")
+    message(FATAL_ERROR "xbased's Mac build is x86-64 only (CMAKE_OSX_ARCHITECTURES=x86_64): the translator "
+                        "emits x86-64 code, which Apple silicon runs under Rosetta 2")
+  endif()
+  set(NC_MACOS_X64 ON)
+endif()
+if(NC_LINUX_X64 OR NC_MACOS_X64)
+  set(NC_POSIX_PC ON)
+endif()
 if(NC_LINUX_X64)
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/linux.cmake")
+elseif(NC_MACOS_X64)
+  include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/macos.cmake")
 elseif(WIN32)
   # Windows x64: the guest CPU is the core's own x86-32 -> x86-64 translator
   # (cpu/cpu_x86.cpp, on Zydis) instead of FEX; cmake/win.cmake.
@@ -74,7 +96,7 @@ target_include_directories(nc_slirp BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/
 target_include_directories(nc_slirp PUBLIC "${CMAKE_BINARY_DIR}/slirp")
 target_link_libraries(nc_slirp PRIVATE nc_glib)
 target_compile_options(nc_slirp PRIVATE -w)
-if(NC_LINUX_X64)
+if(NC_POSIX_PC)
   target_compile_options(nc_slirp PRIVATE "SHELL:-include signal.h")   # misc.c's (Android's headers bring it)
 endif()
 
@@ -83,6 +105,11 @@ if(NC_LINUX_X64)
       compat/linux/seh.c compat/linux/linux.c)
   set(NC_CPU_LIB nc_zydis)
   set(NC_SYS_LIBS pthread dl m)
+elseif(NC_MACOS_X64)
+  set(NC_PLATFORM_SOURCES core/vm.c core/fault_win.c core/jmp_x64.c cpu/cpu_x86.cpp cpu/x64emu.cpp
+      compat/macos/seh.c compat/macos/macos.c compat/linux/linux.c)
+  set(NC_CPU_LIB nc_zydis)
+  set(NC_SYS_LIBS pthread m resolv)
 elseif(WIN32)
   set(NC_PLATFORM_SOURCES core/vm.c core/vm_win.cpp core/fault_win.c core/jmp_x64.c cpu/cpu_x86.cpp cpu/x64emu.cpp compat/win/win.c)
   set(NC_CPU_LIB nc_zydis)
@@ -169,7 +196,7 @@ endif()
 # xboxrun's custom Vulkan driver ("vkdriver="): the app's code for it
 # (native/app/vkdriver.c, vklayer.c), through adrenotools when NC_DEPS has it
 # (cmake/app.cmake).
-if(WIN32 OR NC_LINUX_X64)
+if(WIN32 OR NC_POSIX_PC)
   add_executable(xboxrun EXCLUDE_FROM_ALL run/xboxrun.c run/capture.c)
   target_link_libraries(xboxrun PRIVATE hakux_native hakux_hle z)
 else()
@@ -181,7 +208,7 @@ target_link_libraries(nc_slirp PRIVATE hakux_native)   # nc_log
 
 # The hakuX app's native core library (native/app, cmake/app.cmake); on
 # Windows the hakuX executable (native/app/win_main.c, cmake/app_win.cmake).
-if(WIN32 OR NC_LINUX_X64)
+if(WIN32 OR NC_POSIX_PC)
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/app_win.cmake")
 else()
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/app.cmake")
@@ -225,4 +252,6 @@ if(WIN32)
   endif()
 elseif(NC_LINUX_X64)
   nc_linux_compat(hakux_native hakux_hle hakux_apu nc_glib nc_slirp xboxrun hakux)
+elseif(NC_MACOS_X64)
+  nc_macos_compat(hakux_native hakux_hle hakux_apu nc_glib nc_slirp xboxrun hakux)
 endif()

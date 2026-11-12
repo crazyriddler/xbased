@@ -220,7 +220,8 @@ Command line: `xbased <image.iso, .chd or a game's folder> [options]` starts a g
 are the same as the settings files' lines (`scale=2`, `uncap`, `crt=2`,
 `fullscreen=0`, `mod=<patch>`...). Settings are kept in `xbased.ini` (global)
 and `games/<TITLE ID>.<version>.ini` (per game) beside the executable on
-Windows, in `~/.local/share/xbased/` on Linux.
+Windows, in `~/.local/share/xbased/` on Linux and in
+`~/Library/Application Support/xbased/` on macOS.
 
 ### Default keyboard controls
 
@@ -333,6 +334,26 @@ is there). SDL3 is linked statically; at run time the system needs glibc 2.35
 or newer and a Vulkan driver (Mesa or the GPU vendor's). To make the AppImage
 in `../dist`: `tools/release/package_linux.sh ../build/linux` (the release
 one is built on Ubuntu 22.04, so it runs there and on newer distributions).
+
+### macOS (x86-64; Apple silicon through Rosetta 2)
+
+An x86-64 app with the same translator, its Vulkan renderer on
+[MoltenVK](https://github.com/KhronosGroup/MoltenVK) (Metal). With Xcode,
+CMake and Ninja (`brew install cmake ninja`), and Rosetta 2 on Apple silicon:
+
+```bash
+git clone https://github.com/crazyriddler/xbased
+cd xbased
+tools/fetch_deps.sh
+cmake -S native -B ../build/mac -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build ../build/mac --target hakux
+open ../build/mac/xbased.app
+```
+
+`tools/fetch_deps.sh` fetches MoltenVK's release, which the build puts in
+`xbased.app/Contents/Frameworks`. To make the release zip in `../dist`:
+`tools/release/package_macos.sh ../build/mac`. Details in
+[BUILDING.md](BUILDING.md#macos-x86-64-apple-silicon-through-rosetta-2).
 
 More options (link-time optimization, the dependencies' location) are in
 [BUILDING.md](BUILDING.md).

@@ -156,6 +156,8 @@ static void lower_priority(void)
 {
 #ifdef __linux__
     setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), 10);
+#elif defined(__APPLE__)
+    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
 #elif defined(_WIN32)
     nc_win_thread_priority(-1);
 #endif

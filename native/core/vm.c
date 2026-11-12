@@ -10,7 +10,10 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <sys/mman.h>
-#ifndef _WIN32
+#if defined(__APPLE__)
+#include <fcntl.h>
+#include <mach-o/getsect.h>
+#elif !defined(_WIN32)
 #include <sys/syscall.h>
 #endif
 #include <unistd.h>
@@ -29,6 +32,35 @@ bool nc_vmos_init(NcVm *vm, uint32_t ram_size);
 bool nc_vmos_map(NcVm *vm, uint32_t va, uint32_t pa, uint32_t len);
 bool nc_vmos_unmap(NcVm *vm, uint32_t va, uint32_t len);
 void nc_vmos_protect(NcVm *vm, uint32_t va, uint32_t len, int prot);
+#elif defined(__APPLE__)
+static int memfd(const char *name)
+{
+    char n[64];
+    for (unsigned i = 0; i < 16; i++) {
+        snprintf(n, sizeof(n), "/%s.%d.%u", name, (int)getpid(), i);
+        const int fd = shm_open(n, O_RDWR | O_CREAT | O_EXCL, 0600);
+        if (fd >= 0) {
+            shm_unlink(n);
+            fcntl(fd, F_SETFD, FD_CLOEXEC);
+            return fd;
+        }
+        if (errno != EEXIST) {
+            break;
+        }
+    }
+    return -1;
+}
+
+__asm__(".zerofill __XBGUEST,__xbguest,_nc_guest_space,0xFFFF0000,12\n\t"
+        ".zerofill __XBGUARD,__xbguard,_nc_guard_space,0x100000000,12\n\t");
+extern char nc_guest_space[] __asm__("_nc_guest_space");
+extern char nc_guard_space[] __asm__("_nc_guard_space");
+
+static bool own_segment(const char *name, uint64_t lo, uint64_t hi)
+{
+    const struct segment_command_64 *sc = (const struct segment_command_64 *)getsegbyname(name);
+    return sc && sc->vmaddr == lo && sc->vmaddr + sc->vmsize == hi;
+}
 #else
 static int memfd(const char *name)
 {
@@ -58,7 +90,28 @@ bool nc_vm_init(NcVm *vm, uint32_t ram_size)
     }
     vm->ram_size = ram_size;
 #else
-#if defined(__x86_64__)
+#if defined(__x86_64__) && defined(__APPLE__)
+    vm->reservation_len = (1ull << 32) - 0x10000;
+    if ((uintptr_t)nc_guest_space != 0x10000 || !own_segment("__XBGUEST", 0x10000, 1ull << 32)) {
+        nc_log("hakuX-native", "vm: the low 4 GiB aren't the executable's to give the guest (linked without "
+                               "cmake/macos.cmake's segments)");
+        return false;
+    }
+    void *r = mmap((void *)0x10000, vm->reservation_len, PROT_NONE,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED, -1, 0);
+    if (r != (void *)0x10000) {
+        nc_log("hakuX-native", "vm: the low 4 GiB couldn't be reserved (%s)", strerror(errno));
+        return false;
+    }
+    vm->reservation = r;
+    vm->base = NULL;
+    if ((uintptr_t)nc_guard_space == (1ull << 32) && own_segment("__XBGUARD", 1ull << 32, 2ull << 32)) {
+        mmap((void *)(1ull << 32), 1ull << 32, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE | MAP_FIXED,
+             -1, 0);
+    } else {
+        nc_log("hakuX-native", "vm: the 4 GiB above the guest's aren't the executable's to keep empty");
+    }
+#elif defined(__x86_64__)
     /* x86-64 (the translator runs guest code at its own addresses): the
      * guest's 4 GiB at host address 0, from 0x10000 (the kernel keeps the
      * first 64 KiB, mmap_min_addr; no title maps there). A PIE executable

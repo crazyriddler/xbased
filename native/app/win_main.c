@@ -109,11 +109,15 @@ static uint32_t g_title_id;  /* ... its title id */
 
 static void exe_dir(void)
 {
+#ifdef __APPLE__
+    snprintf(g_exe_dir, sizeof(g_exe_dir), "%s", cfg_exe_dir());
+#else
     DWORD n = GetModuleFileNameA(NULL, g_exe_dir, sizeof(g_exe_dir));
     while (n && g_exe_dir[n - 1] != '\\' && g_exe_dir[n - 1] != '/') {
         n--;
     }
     g_exe_dir[n] = 0;
+#endif
     snprintf(g_data_dir, sizeof(g_data_dir), "%s", cfg_data_dir());
 }
 
@@ -1387,6 +1391,8 @@ static void shader_cache_by_version(const char *base)
 }
 #ifdef _WIN32
 #define NC_PLATFORM_NAME "Windows"
+#elif defined(__APPLE__)
+#define NC_PLATFORM_NAME "macOS"
 #else
 #define NC_PLATFORM_NAME "Linux"
 #endif
@@ -1509,7 +1515,16 @@ int main(int argc, char *argv[])
     nc_win_mods_cleanup(g_exe_dir);     /* what an update took away (win_mods.h) */
 
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-#ifndef _WIN32
+#ifdef __APPLE__
+    {
+        const char *vk = nc_vk_library_path();
+        if (vk) {
+            SDL_SetHint(SDL_HINT_VULKAN_LIBRARY, vk);
+            nc_log("hakuX-app", "Vulkan library: %s", vk);
+        }
+    }
+    SDL_SetHint(SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES, "0");
+#elif !defined(_WIN32)
     /* PulseAudio's API first: PipeWire desktops serve it too, and where
      * PipeWire's own is missing (WSLg) SDL waits half a minute on it */
     SDL_SetHint(SDL_HINT_AUDIO_DRIVER, "pulseaudio,pipewire,alsa");
