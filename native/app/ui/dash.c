@@ -6,6 +6,7 @@
 #include "native/app/ui/dash.h"
 #include "native/app/ui/console_cfg.h"
 #include "native/app/ui/dash_int.h"
+#include "native/app/ui/homebrew.h"
 #include "native/app/ui/shortcut.h"
 #include "native/app/ui/sound.h"
 #include "native/app/ui/update.h"
@@ -1471,8 +1472,8 @@ static void exit_yes(Dash *d)
 static void scr_main(void)
 {
     const float W = ui_w(), H = ui_h();
-    const enum UiStr items[] = {S_GAMES, S_MEMORY, S_SETTINGS, S_ONLINE, S_EXIT};
-    const int n = 5;
+    const enum UiStr items[] = {S_GAMES, S_HOMEBREW, S_MEMORY, S_SETTINGS, S_ONLINE, S_EXIT};
+    const int n = 6;
     int *sel = &D.sel[SCR_MAIN];
     (void)k_main_items;
     /* a tall window: the orb on top, the menu under it */
@@ -1507,6 +1508,7 @@ static void scr_main(void)
         if ((s && D.in.ok) || (over && D.in.click)) {
             switch (items[i]) {
             case S_GAMES: dash_push(SCR_GAMES); break;
+            case S_HOMEBREW: D.sel[SCR_HOMEBREW] = D.scroll[SCR_HOMEBREW] = 0; dash_push(SCR_HOMEBREW); break;
             case S_MEMORY: dash_push(SCR_MEMORY); break;
             case S_SETTINGS: dash_push(SCR_SETTINGS); break;
             case S_ONLINE: dash_push(SCR_ONLINE); break;
@@ -2471,6 +2473,7 @@ int dash_run(SDL_Window *win, const char *exe)
         dash_take_folder();
         lib_poll();
         update_poll();
+        hb_poll();
         /* a scan done: box art for the games without (those found since too) */
         const bool scanning = lib_scanning();
         if (was_scanning && !scanning && cfg_bool(&D.global, "covers", true) && lib_count()) {
@@ -2545,6 +2548,9 @@ int dash_run(SDL_Window *win, const char *exe)
         case SCR_ABOUT: scr_about(); break;
         case SCR_BROWSE: scr_browse(); break;
         case SCR_FIND: scr_find(); break;
+        case SCR_HOMEBREW: scr_homebrew(); break;
+        case SCR_STORE: scr_store(); break;
+        case SCR_STORE_APP: scr_store_app(); break;
         default: break;
         }
         ui_layer_end();
