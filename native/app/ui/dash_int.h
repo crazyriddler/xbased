@@ -32,7 +32,7 @@ typedef struct In {
 enum Screen {
     SCR_MAIN, SCR_GAMES, SCR_GAME, SCR_GAME_SETTINGS, SCR_MODS, SCR_STATES, SCR_SETTINGS, SCR_CONTROLS,
     SCR_REMAP, SCR_MEMORY, SCR_MEMORY_TITLE, SCR_ONLINE, SCR_ABOUT, SCR_INGAME, SCR_INGAME_SLOTS, SCR_STICKS,
-    SCR_TRIGGERS, SCR_BROWSE, SCR_FIND, SCR_COUNT
+    SCR_TRIGGERS, SCR_BROWSE, SCR_FIND, SCR_OGDASH, SCR_COUNT
 };
 
 typedef struct Dash {
@@ -169,5 +169,9 @@ void launch_game(LibGame *g, const char *extra);
  * the tray empty; a notice when it isn't there */
 bool dash_xbox_dashboard_installed(void);
 void dash_open_xbox_dashboard(void);
+void dash_install_xbox_dashboard(void);     /* pick a qcow2 image; its C: drive read in (a thread) */
+bool dash_install_busy(void);
+void dash_install_poll(void);
+void scr_ogdash(void);
 
 #endif

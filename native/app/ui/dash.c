@@ -9,6 +9,7 @@
 #include "native/app/ui/shortcut.h"
 #include "native/app/ui/sound.h"
 #include "native/app/ui/update.h"
+#include "native/app/ui/xemu_import.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -1346,6 +1347,59 @@ void dash_open_xbox_dashboard(void)
     g_go.t0 = -1;
 }
 
+/* ---- the dashboard added from a qcow2 hard disk image (xemu_import.c reads
+ * the C: drive's files into hdd/Partition2 on a thread; the outcome a toast) ---- */
+static void install_file_cb(void *ud, const char *const *files, int filter)
+{
+    (void)ud;
+    (void)filter;
+    if (!files || !files[0]) {
+        return;
+    }
+    const char *f = files[0];
+    const size_t n = strlen(f);
+    if (n < 6 || SDL_strcasecmp(f + n - 6, ".qcow2")) {
+        dash_toast(T(S_OG_ONLY_QCOW2));
+        return;
+    }
+    const char *hdd = cfg_get(&D.global, "hdd");
+    char dir[1200];
+    if (hdd && hdd[0]) {
+        snprintf(dir, sizeof(dir), "%s", hdd);
+    } else {
+        snprintf(dir, sizeof(dir), "%shdd", cfg_data_dir());
+    }
+    xi_dash_start(f, dir);
+    dash_toast(T(S_OG_READING));
+}
+
+void dash_install_xbox_dashboard(void)
+{
+    if (xi_dash_state() == 1) {
+        return;
+    }
+    dash_browse_file(T(S_OG_PICK), "qcow2", install_file_cb, NULL);
+}
+
+bool dash_install_busy(void)
+{
+    return xi_dash_state() == 1;
+}
+
+void dash_install_poll(void)
+{
+    const char *r = xi_dash_take();
+    if (r) {
+        char msg[400];
+        if (r[0]) {
+            snprintf(msg, sizeof(msg), "%s: %s", T(S_OG_FAIL), r);
+        } else {
+            snprintf(msg, sizeof(msg), "%s", T(S_OG_DONE));
+        }
+        dash_toast(msg);
+    }
+}
+
 void launch_game(LibGame *g, const char *extra)
 {
     if (g_go.on || child_running()) {
@@ -2471,6 +2525,7 @@ int dash_run(SDL_Window *win, const char *exe)
         dash_take_folder();
         lib_poll();
         update_poll();
+        dash_install_poll();
         /* a scan done: box art for the games without (those found since too) */
         const bool scanning = lib_scanning();
         if (was_scanning && !scanning && cfg_bool(&D.global, "covers", true) && lib_count()) {
@@ -2545,6 +2600,7 @@ int dash_run(SDL_Window *win, const char *exe)
         case SCR_ABOUT: scr_about(); break;
         case SCR_BROWSE: scr_browse(); break;
         case SCR_FIND: scr_find(); break;
+        case SCR_OGDASH: scr_ogdash(); break;
         default: break;
         }
         ui_layer_end();

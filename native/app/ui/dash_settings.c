@@ -1569,9 +1569,11 @@ void scr_online(void)
         SDL_OpenURL(site);
     }
     if (net && !strcmp(net, "nat")) {
-        /* Insignia's sign-up and the accounts: the Xbox dashboard's Xbox Live */
-        if (list_row(&l, T(S_XBOX_DASH), dash_xbox_dashboard_installed() ? NULL : T(S_NOT_INSTALLED), NULL)) {
-            dash_open_xbox_dashboard();
+        /* Insignia's sign-up and the accounts: the Xbox dashboard's Xbox Live; its own screen
+         * opens it, or adds it from a qcow2 hard disk image first */
+        if (list_row(&l, T(S_XBOX_DASH), dash_xbox_dashboard_installed() ? ">" : T(S_NOT_INSTALLED), NULL)) {
+            D.sel[SCR_OGDASH] = D.scroll[SCR_OGDASH] = 0;
+            dash_push(SCR_OGDASH);
         }
         if (list_selected(&l)) {
             help = T(S_XBOX_DASH_HELP);
