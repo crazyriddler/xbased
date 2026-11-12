@@ -20,6 +20,7 @@ set(NC_APP_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/sound.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/dash.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/dash_settings.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/autofix.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/cheat_text.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/dash_memory.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/dash_browse.c"

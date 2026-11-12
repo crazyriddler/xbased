@@ -27,12 +27,14 @@
  * Android app passes its activity (loadstate=, relaunch).
  */
 #include "native/app/app.h"
+#include "native/app/ui/autofix.h"
 #include "native/app/ui/config.h"
 #include "native/app/ui/console_cfg.h"
 #include "native/app/ui/dash.h"
 #include "native/app/ui/i18n.h"
 #include "native/app/ui/input_map.h"
 #include "native/app/ui/ui.h"
+#include "hw/xbox/hle/hitch.h"
 #include "hw/xbox/hle/vk/swapchain.h"
 #include "hw/xbox/hle/vk/share.h"
 #include "native/app/ui/xbox_data.h"
@@ -371,6 +373,8 @@ static void run_again(const char *extra, bool hold)
 {
     nc_kernel_set_paused(&g_core.kernel, true);    /* the picture held is the last one */
     nc_audio_set_paused(true);
+    af_clear_env();     /* the next run reads its fixes again (the game's file, its own fixtrial=) */
+    const bool keep_trial = extra && !strcmp(extra, "relaunch");   /* a title's relaunch goes on with the trial */
     char hold_path[MAX_PATH + 32] = "";
     if (hold) {
         hold_picture(hold_path, sizeof(hold_path));
@@ -386,7 +390,8 @@ static void run_again(const char *extra, bool hold)
         if (extra && !strncmp(a, extra, name_len) && (a[name_len] == '=' || a[name_len] == 0)) {
             continue;
         }
-        if (!a[0] || !strcmp(a, "relaunch") || !strncmp(a, "loadstate=", 10)) {
+        if (!a[0] || !strcmp(a, "relaunch") || !strncmp(a, "loadstate=", 10) ||
+            (!keep_trial && !strncmp(a, "fixtrial=", 9))) {
             continue; /* one run's */
         }
         n += snprintf(cmd + n, sizeof(cmd) - (size_t)n, " \"%s\"", a);
@@ -441,7 +446,8 @@ static void run_again(const char *extra, bool hold)
         if (extra && !strncmp(a, extra, name_len) && (a[name_len] == '=' || a[name_len] == 0)) {
             continue;
         }
-        if (!a[0] || !strcmp(a, "relaunch") || !strncmp(a, "loadstate=", 10)) {
+        if (!a[0] || !strcmp(a, "relaunch") || !strncmp(a, "loadstate=", 10) ||
+            (!keep_trial && !strncmp(a, "fixtrial=", 9))) {
             continue;
         }
         argv[k++] = a;
@@ -1240,6 +1246,118 @@ static void ingame_menu(SDL_Window *win, bool *paused, bool minimized)
     }
 }
 
+/* ---- stalled games (ui/autofix.c) ----
+ * A game that has stopped for AF_STALL_S seconds (no frame, the monitor's hang) is run again with the next
+ * fix that fits what the threads and the render thread are doing; the run that gets 900 frames past the
+ * stall, and doesn't stall, keeps its fix in the game's settings file. A notice counts down first: the
+ * menu, a pause or the window going away cancels it for the run. */
+static AfRun g_af;
+static bool g_af_on = true;
+static struct {
+    bool active;
+    Uint64 until_ms, said_ms;
+    char arg[240];
+    char label[80];
+} g_af_pend;
+
+static void af_files(char *game, size_t gn, char *learned, size_t ln)
+{
+    snprintf(game, gn, "%sgames/%s.ini", g_data_dir, g_key);
+    snprintf(learned, ln, "%scompat_learned.ini", g_data_dir);
+}
+
+static void af_countdown_notice(Uint64 now_ms)
+{
+    char t[260];
+    const int left = (int)((g_af_pend.until_ms > now_ms ? g_af_pend.until_ms - now_ms : 0) + 999) / 1000;
+    snprintf(t, sizeof(t), T(S_AF_TRY), g_af_pend.label, left);
+    notice(t, NULL);
+    g_af_pend.said_ms = now_ms;
+}
+
+static void autofix_tick(bool away)
+{
+    if (!g_af.enabled) {
+        return;
+    }
+    const Uint64 now_ms = SDL_GetTicks();
+    if (g_af_pend.active) {
+        if (away) {
+            g_af_pend.active = false;
+            g_af.enabled = false;
+            nc_log("hakuX-app", "autofix: cancelled (the menu, a pause or the window went away)");
+            notice(T(S_AF_CANCELLED), NULL);
+        } else if (now_ms >= g_af_pend.until_ms) {
+            g_af_pend.active = false;
+            run_again(g_af_pend.arg, false);
+        } else if (now_ms - g_af_pend.said_ms >= 1000) {
+            af_countdown_notice(now_ms);
+        }
+        return;
+    }
+    const double now = (double)now_ms / 1000.0;
+    const double hang = away ? 0.0 : hle_hitch_live_hang_s();
+    const uint64_t frames = hle_hitch_frames();
+    if (away || !af_due(&g_af, now, hang, frames)) {
+        return;
+    }
+    NcStallFacts f;
+    nc_kernel_stall_facts(&g_core.kernel, &f);
+    const int act = hle_hitch_render_act();
+    const bool gpu = act == HLE_ACT_GPU || act == HLE_ACT_DISPLAY || act == HLE_ACT_FLIP || act == HLE_ACT_TRAP ||
+                     act == HLE_ACT_ARENA || act == HLE_ACT_RING;
+    char gp[MAX_PATH + 64], lp[MAX_PATH + 64];
+    af_files(gp, sizeof(gp), lp, sizeof(lp));
+    Config *game = malloc(sizeof(*game)), *learned = malloc(sizeof(*learned));
+    if (!game || !learned) {
+        free(game);
+        free(learned);
+        return;
+    }
+    cfg_load(game, gp);
+    cfg_load(learned, lp);
+    const uint32_t pub = g_title_id >> 16;
+    const AfPoll p = af_poll(&g_af, now, hang, frames, f.running + f.ready, gpu, false, pub, game, learned,
+                             nc_kernel_fixups_applied());
+    if (p.act == AF_PASS) {
+        af_record_pass(game, learned, p.sym, pub, p.fix->id);
+        cfg_save(game);
+        cfg_save(learned);
+        nc_log("hakuX-app", "autofix: \"%s\" got the game %d frames past the stall: kept in %s", p.fix->id,
+               AF_PASS_FRAMES, gp);
+        char t[260];
+        snprintf(t, sizeof(t), T(S_AF_KEPT), p.fix->label);
+        notice(t, NULL);
+    } else if (p.act == AF_TRY || p.act == AF_GIVEUP) {
+        nc_log("hakuX-app",
+               "autofix: stalled (%s) at frame %llu after %.0f s: threads %u (%u running, %u ready, %u waiting, %u suspended), "
+               "render %d",
+               af_sym_name(p.sym), (unsigned long long)p.stall_frame, hang, f.threads, f.running, f.ready, f.waiting,
+               f.suspended, act);
+        if (p.failed) {
+            af_record_fail(game, learned, g_af.trial_sym, pub, p.failed->id);
+            cfg_save(game);
+            cfg_save(learned);
+            nc_log("hakuX-app", "autofix: \"%s\" didn't help", p.failed->id);
+        }
+        if (p.act == AF_GIVEUP) {
+            nc_log("hakuX-app", "autofix: no fix left to try for this game (%d tried)", g_af.trials);
+            notice(T(S_AF_GIVEUP), NULL);
+        } else {
+            char v[200];
+            af_run_trial_value(&g_af, p.fix->id, p.stall_frame, p.sym, v, sizeof(v));
+            snprintf(g_af_pend.arg, sizeof(g_af_pend.arg), "fixtrial=%s", v);
+            snprintf(g_af_pend.label, sizeof(g_af_pend.label), "%s", p.fix->label);
+            g_af_pend.until_ms = now_ms + 10000;
+            g_af_pend.active = true;
+            nc_log("hakuX-app", "autofix: trying \"%s\" (%s) in 10 s", p.fix->id, p.fix->what);
+            af_countdown_notice(now_ms);
+        }
+    }
+    free(game);
+    free(learned);
+}
+
 /* debug.hakux.state ("save:<slot>", "load:<slot>"), as the app's menu would */
 static void state_request_poll(void)
 {
@@ -1501,6 +1619,18 @@ int main(int argc, char *argv[])
         }
     }
 #endif
+    for (int i = 0; i < g_nargs; i++) {
+        /* the first run of an autofix chain (fixtrial=<id>@<frame>#1#<sym>): the log of the run that stalled
+         * is kept apart, or the new run's would take its place and the evidence of the stall with it */
+        const char *h = !strncmp(g_args[i], "fixtrial=", 9) ? strchr(g_args[i], '#') : NULL;
+        if (h && atoi(h + 1) == 1) {
+            char from[MAX_PATH + 16], to[MAX_PATH + 32];
+            snprintf(from, sizeof(from), "%sxbased.log", g_data_dir);
+            snprintf(to, sizeof(to), "%sxbased-before-autofix.log", g_data_dir);
+            remove(to);
+            rename(from, to);
+        }
+    }
     log_setup(opt_flag("console"), again);
     if (again) {
         nc_log("hakuX-app", "---- started again (%s)", opt_flag("relaunch") ? "the title's relaunch" : "a state loaded");
@@ -1599,6 +1729,7 @@ int main(int argc, char *argv[])
 
     NcOptions opt;
     nc_options_init(&opt);
+    af_run_init(&g_af, false, 0);
     for (int i = 0; i < g_nargs; i++) {
         const char *a = g_args[i];
         char resolved[2400];
@@ -1656,8 +1787,24 @@ int main(int argc, char *argv[])
             nc_present_set_show_fps(atoi(a + 8) != 0);
         } else if (!strncmp(a, "mutebg=", 7)) {
             g_mute_bg = atoi(a + 7) != 0;
+        } else if (!strncmp(a, "autofix=", 8)) {
+            g_af_on = atoi(a + 8) != 0;
+        } else if (!strncmp(a, "fix=", 4)) {
+            /* a fix the game's file keeps (autofix.c) */
+            nc_log("hakuX-app", "autofix: %s \"%s\"", af_apply(a + 4, &opt) ? "applied the kept fix" : "unknown fix", a + 4);
+        } else if (!strncmp(a, "fixtrial=", 9)) {
+            /* the fix this run is a trial of: kept if the game gets past where it stalled */
+            if (af_run_set_trial(&g_af, a + 9)) {
+                af_apply(g_af.trial_id, &opt);
+                nc_log("hakuX-app", "autofix: trial %d: \"%s\" (for \"%s\", the stall at frame %llu)", g_af.trials,
+                       g_af.trial_id, af_sym_name(g_af.trial_sym), (unsigned long long)g_af.trial_frame);
+            } else {
+                nc_log("hakuX-app", "autofix: unreadable trial %s", a + 9);
+            }
         }
     }
+    g_af.enabled = g_af_on && !xbox_dash && g_key[0] && g_disc_fd >= 0;
+    g_af.started_s = (double)SDL_GetTicks() / 1000.0;
     nc_win_mods_prepare(g_exe_dir, g_disc_fd, g_args, g_nargs);
     if (opt.uncap && opt.fps_cap <= 0 && g_maxfps != 0) {
         /* uncapped with no limit of the game's own: the global one, never
@@ -1928,6 +2075,7 @@ int main(int argc, char *argv[])
         }
         update_pads(focused);
         state_request_poll();
+        autofix_tick(paused || minimized);
 
         /* the GPU can't draw the game (no Vulkan device, a driver lacking
          * what it needs): the game ran on with its sound over a black

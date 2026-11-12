@@ -425,6 +425,11 @@ uint32_t nc_kernel_xbdm_stub(NcKernel *k, unsigned ordinal, const char **name);
  * hardware is pointed at the kernel (DirectSound's GP mailbox wait). */
 struct HleXbeInfo;
 void nc_kernel_title_fixups(NcKernel *k, const struct HleXbeInfo *xbe);
+/* the patches this run applied: NC_FIXUP_* */
+#define NC_FIXUP_APU       1u
+#define NC_FIXUP_XMV       2u
+#define NC_FIXUP_D3D_TIMER 4u
+unsigned nc_kernel_fixups_applied(void);
 /* ... and the library code a section holds (XMV's stream wait), at boot and
  * as XeLoadSection loads one */
 void nc_kernel_section_fixups(NcKernel *k, uint32_t va, uint32_t len, const char *name);
@@ -713,6 +718,11 @@ void nc_intr_return(NcKernel *k);
 void nc_kernel_dump_recent(int fd);
 /* Every guest thread: state, wait objects, top of stack (ps.c). */
 void nc_kernel_dump_threads(NcKernel *k, int fd);
+/* The threads by state (racy: a look for the front end's stall check). ready counts the runnable ones. */
+typedef struct NcStallFacts {
+    unsigned threads, running, ready, waiting, suspended;
+} NcStallFacts;
+void nc_kernel_stall_facts(const NcKernel *k, NcStallFacts *out);
 
 /* A guest access to va, a page the guest doesn't have (the host fault in
  * translated code, f its state there): with a page-fault handler of the

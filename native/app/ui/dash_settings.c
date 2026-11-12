@@ -213,6 +213,7 @@ void scr_settings(void)
         rows_video(&l);
         opt_bool(&l, S_FULLSCREEN, "fullscreen", true, true);
         opt_bool(&l, S_SHOW_FPS, "showfps", false, false);
+        opt_bool(&l, S_AUTOFIX, "autofix", true, false);
         opt_bool(&l, S_VSYNC, "vsync", true, false);
         {
             /* full screen at the panel's highest refresh a multiple of 60

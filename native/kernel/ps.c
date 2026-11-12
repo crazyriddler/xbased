@@ -774,3 +774,24 @@ void nc_kernel_dump_threads(NcKernel *k, int fd)
         nc_dump_line(fd, line, (size_t)n);
     }
 }
+
+void nc_kernel_stall_facts(const NcKernel *k, NcStallFacts *out)
+{
+    memset(out, 0, sizeof(*out));
+    for (unsigned i = 0; i < k->threads_hi; i++) {
+        const NcThread *t = &k->threads[i];
+        if (t->state == NC_T_FREE || t->state == NC_T_TERMINATED || t == k->dpc_thread || t == k->isr_thread) {
+            continue;
+        }
+        out->threads++;
+        if (t->state == NC_T_RUNNING) {
+            out->running++;
+        } else if (t->state == NC_T_READY && !t->suspend) {
+            out->ready++;
+        } else if (t->state == NC_T_WAITING) {
+            out->waiting++;
+        } else if (t->suspend) {
+            out->suspended++;
+        }
+    }
+}

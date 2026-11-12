@@ -103,6 +103,25 @@ static struct {
     unsigned gtrace_left;               /* debug: GPU event traces still to log */
 } g_h;
 
+/* what the front end's stall check reads (hitch.h): the live hang's age, ms, and frames closed */
+static uint32_t g_live_age_ms;
+static uint64_t g_frames_closed;
+
+double hle_hitch_live_hang_s(void)
+{
+    return __atomic_load_n(&g_live_age_ms, __ATOMIC_RELAXED) / 1000.0;
+}
+
+uint64_t hle_hitch_frames(void)
+{
+    return __atomic_load_n(&g_frames_closed, __ATOMIC_RELAXED);
+}
+
+int hle_hitch_render_act(void)
+{
+    return g_hitch_on ? (int)__atomic_load_n(&g_hitch_thr[HLE_HT_RENDER].act, __ATOMIC_ACQUIRE) : -1;
+}
+
 static inline double t2ms(int64_t ticks)
 {
     return ticks * g_hle_prof_ns_per_tick / 1e6;
@@ -452,11 +471,13 @@ static void *wd_thread(void *opaque)
         hle_mutex_lock(&g_h.mx);
         paused = g_h.paused;
         if (!g_h.have_win || g_h.paused) {
+            __atomic_store_n(&g_live_age_ms, 0, __ATOMIC_RELAXED);
             hle_mutex_unlock(&g_h.mx);
             sampling = false;
             continue;
         }
         double el = t2ms(hle_prof_now() - g_h.win.t);
+        __atomic_store_n(&g_live_age_ms, el >= g_h.hang_ms ? (uint32_t)el : 0u, __ATOMIC_RELAXED);
         sampling = el >= 0.8f * stutter_ms();
         if (sampling) {
             sample(&g_h.eip);
@@ -542,6 +563,7 @@ static void window(uint32_t id)
         return;
     }
     g_h.swaps++;
+    __atomic_store_n(&g_frames_closed, g_h.swaps, __ATOMIC_RELAXED);
     hle_hitch_frame(id, HLE_FR_SWAP);
     Snap now;
     snap_take(&now);

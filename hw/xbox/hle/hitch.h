@@ -99,6 +99,13 @@ static inline void hle_hitch_leave(uint32_t prev)
 }
 
 /* the calling thread's slot (render and decode threads at start; the vCPU) */
+/* For the front end's stall check (autofix.c): how long the window now open has run, when that is a
+ * hang (0 when it isn't, or the game is paused), the frames the monitor has closed, and what the
+ * render thread is doing (an HLE_ACT_*, -1 with the monitor off). Any thread. */
+double hle_hitch_live_hang_s(void);
+uint64_t hle_hitch_frames(void);
+int hle_hitch_render_act(void);
+
 void hle_hitch_thread(int slot);
 /* the decode thread: a flip or a display start of swap id (closes the
  * frame window) */

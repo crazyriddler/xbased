@@ -76,6 +76,14 @@ static bool section_mapped(const NcVm *vm, uint32_t va, uint32_t len)
     return true;
 }
 
+/* which patches this run applied (NC_FIXUP_*), for the front end's stall fixes: a patch that wasn't
+ * applied can't be what stalls the game */
+static unsigned g_applied;
+unsigned nc_kernel_fixups_applied(void)
+{
+    return g_applied;
+}
+
 void nc_kernel_title_fixups(NcKernel *k, const HleXbeInfo *xbe)
 {
     for (unsigned i = 0; i < xbe->nsections; i++) {
@@ -106,6 +114,7 @@ void nc_kernel_title_fixups(NcKernel *k, const HleXbeInfo *xbe)
                 memcpy(site + 1, &rel, 4);
                 site[5] = 0x90;
                 patched++;
+                g_applied |= NC_FIXUP_APU;
                 nc_log("hakuX-native", "fixups: DirectSound mailbox wait at %08x (%s) waits on the APU (stub %08x)",
                        va, s->name, stub);
             }
@@ -281,6 +290,7 @@ static unsigned timer_fixups(NcKernel *k, uint32_t va, uint32_t len, const char 
             site[2] = 0x31, site[3] = 0xF6;                     /* xor esi, esi */
             site[4] = 0xEB, site[5] = TIMER_PUSH - (TIMER_PAST + 6); /* jmp ok's push */
             patched++;
+            g_applied |= NC_FIXUP_D3D_TIMER;
             nc_log("hakuX-native", "fixups: D3D timer callback at %08x (%s) comes at once when its time "
                    "has passed", va + (uint32_t)(p - base), name);
         }
@@ -308,6 +318,7 @@ static unsigned xmv_fixups(NcKernel *k, uint32_t va, uint32_t len, const char *n
                 memcpy(site + 1, &rel, 4);
                 memset(site + 5, 0x90, XMV_DEC - XMV_JE - 5);
                 patched++;
+                g_applied |= NC_FIXUP_XMV;
                 nc_log("hakuX-native", "fixups: XMV's stream wait at %08x (%s) runs DirectSoundDoWork for a "
                        "stopped stream too (stub %08x)", m, name, stub);
             }
