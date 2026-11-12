@@ -2178,6 +2178,38 @@ static void scr_game(void)
     }
     List l;
     list_begin(&l, 110 + cw, 150, W - 180 - cw, ch, 60);
+    /* the latest savestate: pick the game up where it was left */
+    {
+        static char key[24];
+        static char arg[1300], when[48];
+        static double checked;
+        static bool have;
+        const double now = ui_time();
+        if (strcmp(key, g->g.key) || now - checked > 2.0) {     /* a look at the disk twice a second at most */
+            checked = now;
+            snprintf(key, sizeof(key), "%s", g->g.key);
+            char dir[1100];
+            states_dir(g, dir, sizeof(dir));
+            int64_t best = 0;
+            have = false;
+            for (int i = 0; i <= 10; i++) {     /* slot 0: the save made on leaving the game */
+                char p[1200];
+                snprintf(p, sizeof(p), "%s/slot%d.hxs", dir, i);
+                SDL_PathInfo pi;
+                if (SDL_GetPathInfo(p, &pi) && (!have || pi.modify_time > best)) {
+                    best = pi.modify_time;
+                    have = true;
+                    snprintf(arg, sizeof(arg), "loadstate=%s", p);
+                    SDL_DateTime dt;
+                    SDL_TimeToDateTime(pi.modify_time, &dt, true);
+                    snprintf(when, sizeof(when), "%04d-%02d-%02d %s", dt.year, dt.month, dt.day, dash_hm(dt.hour, dt.minute));
+                }
+            }
+        }
+        if (have && list_row(&l, T(S_RESUME), when, NULL)) {
+            launch_game(g, arg);
+        }
+    }
     if (list_row(&l, T(S_PLAY), NULL, NULL)) {
         launch_game(g, NULL);
     }

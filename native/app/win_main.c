@@ -814,6 +814,11 @@ static void fs_mode(SDL_Window *w)
 }
 static int g_fps_cap;   /* ... its limit, uncapped (0: none) */
 static float g_volume = 1.0f;
+static bool g_autosave;        /* a save state of slot 0 when the game is left: "Resume" picks it up */
+static bool g_is_dash;         /* this process is the Xbox dashboard (no disc) */
+static bool g_quit_pending;    /* the exit's save is running; the loop leaves when it ends */
+static bool g_quit_close;      /* ... leaving the program, not just the game */
+static uint64_t g_quit_deadline;
 static bool g_mute_bg = true;   /* silent while the window isn't the active one */
 
 /* screenshots\<title>-<date>.bmp beside the executable */
@@ -1122,6 +1127,9 @@ static void apply_cfg(const Config *global, const Config *game, bool sound)
         if ((v = cfg_get(c, "mutebg"))) {
             g_mute_bg = atoi(v) != 0;
         }
+        if ((v = cfg_get(c, "autosave"))) {
+            g_autosave = atoi(v) != 0;
+        }
     }
     nc_present_set_crop(crop_h, crop_v);
     g_fx = cfg_bool(global, "ui.fx", true);
@@ -1146,6 +1154,28 @@ static void quit_to_dash(SDL_Window *win)
     exit_now(0);
 }
 
+/* Leaving a game as xemu's "resume where you left off" does: the state saved to slot 0
+ * (it runs on its own thread, the loop keeps presenting) and the exit follows when it
+ * is done. False when there is nothing to save (the game just started, the core not
+ * running, the setting off): the caller leaves at once. */
+static bool start_quit_save(bool close)
+{
+    if (!g_autosave || g_is_dash || g_quit_pending || SDL_GetTicks() < 8000 ||
+        SDL_GetAtomicInt(&g_core_state) != 1 || !hle_pb_active()) {
+        return false;
+    }
+    nc_log("hakuX-app", "leaving: saving the state (slot 0) first");
+    g_quit_pending = true;
+    g_quit_close = close;
+    g_quit_deadline = SDL_GetTicks() + 25000;
+    save_state(0);
+    if (!SDL_GetAtomicInt(&g_saving)) {
+        g_quit_pending = false;     /* it didn't start */
+        return false;
+    }
+    return true;
+}
+
 /* The in-game menu: the emulation paused, the menu drawn by the game's own
  * presenter over its picture, blurred (the overlay). Without the overlay:
  * the presenter off the window (its Vulkan surface dropped) while the
@@ -1167,7 +1197,7 @@ static void ingame_menu(SDL_Window *win, bool *paused, bool minimized)
         const int act = dash_ingame(win, g_key, title ? title + 1 : g_disc, NULL, &slot, live_cfg);
         SDL_HideCursor();
         nc_auto_resync();
-        if (act == DASH_INGAME_QUIT) {
+        if (act == DASH_INGAME_QUIT && !start_quit_save(false)) {
             fx_out();
             quit_to_dash(win);
         }
@@ -1206,7 +1236,7 @@ static void ingame_menu(SDL_Window *win, bool *paused, bool minimized)
     nc_present_frame(NULL);     /* the surface goes */
     const int act = dash_ingame(win, g_key, title ? title + 1 : g_disc, pic, &slot, NULL);
     remove(pic);
-    if (act == DASH_INGAME_QUIT) {
+    if (act == DASH_INGAME_QUIT && !start_quit_save(false)) {
         quit_to_dash(win);
     }
     SDL_HideCursor();   /* the game doesn't use the mouse; the menu may have shown it */
@@ -1552,6 +1582,7 @@ int main(int argc, char *argv[])
             return r;
         }
     }
+    g_is_dash = xbox_dash;
     if (!xbox_dash) {
         snprintf(g_disc, sizeof(g_disc), "%s", disc);
         game_options(g_disc);
@@ -1656,6 +1687,8 @@ int main(int argc, char *argv[])
             nc_present_set_show_fps(atoi(a + 8) != 0);
         } else if (!strncmp(a, "mutebg=", 7)) {
             g_mute_bg = atoi(a + 7) != 0;
+        } else if (!strncmp(a, "autosave=", 9)) {
+            g_autosave = atoi(a + 9) != 0;
         }
     }
     nc_win_mods_prepare(g_exe_dir, g_disc_fd, g_args, g_nargs);
@@ -1795,6 +1828,9 @@ int main(int argc, char *argv[])
         while (SDL_PollEvent(&ev)) {
             switch (ev.type) {
             case SDL_EVENT_QUIT:
+                if (!g_quit_pending && start_quit_save(true)) {
+                    break;      /* leaves when the save is done */
+                }
                 quit = true;
                 break;
             case SDL_EVENT_KEY_DOWN: {
@@ -1958,6 +1994,13 @@ int main(int argc, char *argv[])
                     break;
                 }
             }
+        }
+        if (g_quit_pending && (!SDL_GetAtomicInt(&g_saving) || SDL_GetTicks() > g_quit_deadline)) {
+            g_quit_pending = false;
+            if (g_quit_close) {
+                break;
+            }
+            quit_to_dash(win);
         }
         overlay_tick();
         if (minimized || g_nw.width <= 0 || !nc_present_frame(&g_nw)) {

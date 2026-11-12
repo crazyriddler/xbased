@@ -212,6 +212,7 @@ void scr_settings(void)
     case 0:
         rows_video(&l);
         opt_bool(&l, S_FULLSCREEN, "fullscreen", true, true);
+        opt_bool(&l, S_AUTOSAVE, "autosave", false, false);
         opt_bool(&l, S_SHOW_FPS, "showfps", false, false);
         opt_bool(&l, S_VSYNC, "vsync", true, false);
         {
@@ -1008,8 +1009,8 @@ void scr_states(void)
     List l;
     list_begin(&l, 74, 150, W * 0.5f - 74, H - 244, 64);
     int chosen = -1, sel = 0;
-    bool sel_has = false;
-    for (int s = 1; s <= 10; s++) {
+    bool sel_has = false, sel_set = false;
+    for (int s = 0; s <= 10; s++) {     /* slot 0: the save made on leaving the game */
         char p[1200], label[64], when[64] = "";
         snprintf(p, sizeof(p), "%s/slot%d.hxs", dir, s);
         SDL_PathInfo pi;
@@ -1019,12 +1020,17 @@ void scr_states(void)
             SDL_TimeToDateTime(pi.modify_time, &dt, true);
             snprintf(when, sizeof(when), "%04d-%02d-%02d %s", dt.year, dt.month, dt.day, dash_hm(dt.hour, dt.minute));
         }
-        snprintf(label, sizeof(label), "%s %d", T(S_SLOT), s);
+        if (s == 0) {
+            snprintf(label, sizeof(label), "%s", T(S_AUTOSAVE_SLOT));
+        } else {
+            snprintf(label, sizeof(label), "%s %d", T(S_SLOT), s);
+        }
         if (list_row_icon(&l, g_thumb[s], label, has ? when : T(S_EMPTY), NULL, NULL) && has) {
             chosen = s;
         }
         if (list_selected(&l)) {
             sel = s;
+            sel_set = true;
             sel_has = has;
             if (D.in.x && has) {
                 g_del_slot = s;
@@ -1034,7 +1040,7 @@ void scr_states(void)
     }
     list_end(&l);
     /* the preview: the selected slot's picture, large (outside the list's clip) */
-    if (sel) {
+    if (sel_set) {
         const float px = W * 0.5f + 30, pw = W * 0.5f - 104, ph = pw * 3 / 4;
         ui_round(px - 8, 142, pw + 16, ph + 16, 12, UI_PANEL);
         if (g_thumb[sel]) {
@@ -1044,7 +1050,7 @@ void scr_states(void)
                     UI_ALIGN_CENTER);
         }
     }
-    if (chosen > 0) {
+    if (chosen >= 0) {
         char arg[1300];
         snprintf(arg, sizeof(arg), "loadstate=%s/slot%d.hxs", dir, chosen);
         launch_game(D.cur, arg);
