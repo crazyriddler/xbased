@@ -45,4 +45,22 @@ if [ ! -f "$DEPS/zydis/dependencies/zycore/CMakeLists.txt" ]; then
   git -C "$DEPS/zydis/dependencies/zycore" fetch -q --depth 1 origin 0b2432ced0884fd152b471d97ecf0258ff4d859f
   git -C "$DEPS/zydis/dependencies/zycore" checkout -q FETCH_HEAD
 fi
+if [ "$(uname -s)" = Darwin ]; then
+  mvk_ver=v1.4.2
+  mvk_sha=f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e
+  mvk_dir="$DEPS/MoltenVK"
+  if [ -f "$mvk_dir/.version" ] && [ "$(cat "$mvk_dir/.version")" = "$mvk_ver" ]; then
+    echo "MoltenVK: up to date"
+  else
+    echo "MoltenVK: release $mvk_ver"
+    tmp=$(mktemp -d)
+    curl -fsSL -o "$tmp/MoltenVK-macos.tar" \
+      "https://github.com/KhronosGroup/MoltenVK/releases/download/$mvk_ver/MoltenVK-macos.tar"
+    echo "$mvk_sha  $tmp/MoltenVK-macos.tar" | shasum -a 256 -c - >/dev/null
+    rm -rf "$mvk_dir"
+    tar -xf "$tmp/MoltenVK-macos.tar" -C "$DEPS" MoltenVK/LICENSE MoltenVK/MoltenVK/dynamic/dylib/macOS
+    echo "$mvk_ver" > "$mvk_dir/.version"
+    rm -rf "$tmp"
+  fi
+fi
 echo "deps ready in $DEPS"
