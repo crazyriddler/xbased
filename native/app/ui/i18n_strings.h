@@ -314,3 +314,12 @@ X(S_HOURS_MINS, "%d h %02d min", "%d h %02d min", "%d h %02d min", "%d Std. %02d
 X(S_MINS, "%d min", "%d min", "%d min", "%d Min.", "%d min", "%d min", "%d мин", "%d min", "%d分", "%d 分钟", "%d분")
 X(S_REMOVE_FOLDER_Q, "Take %s out of the library? Its games leave the list (the files stay where they are).", "¿Quitar %s de la biblioteca? Sus juegos salen de la lista (los archivos se quedan donde están).", "Retirer %s de la bibliothèque ? Ses jeux quittent la liste (les fichiers restent en place).", "%s aus der Bibliothek entfernen? Seine Spiele verschwinden aus der Liste (die Dateien bleiben, wo sie sind).", "Togliere %s dalla libreria? I suoi giochi escono dall'elenco (i file restano dove sono).", "Remover %s da biblioteca? Os jogos dela saem da lista (os arquivos ficam onde estão).", "Убрать %s из библиотеки? Её игры пропадут из списка (файлы останутся на месте).", "Usunąć %s z biblioteki? Jej gry znikną z listy (pliki zostaną na miejscu).", "%s をライブラリから外しますか？ゲームは一覧から消えます（ファイルはそのまま残ります）。", "要将 %s 移出游戏库吗？其中的游戏会从列表消失（文件保留原处）。", "%s 을(를) 라이브러리에서 뺄까요? 게임이 목록에서 사라집니다 (파일은 그대로 남습니다).")
 X(S_REMOVE_FILE_Q, "Take %s out of the library? The file stays where it is.", "¿Quitar %s de la biblioteca? El archivo se queda donde está.", "Retirer %s de la bibliothèque ? Le fichier reste en place.", "%s aus der Bibliothek entfernen? Die Datei bleibt, wo sie ist.", "Togliere %s dalla libreria? Il file resta dov'è.", "Remover %s da biblioteca? O arquivo fica onde está.", "Убрать %s из библиотеки? Файл останется на месте.", "Usunąć %s z biblioteki? Plik zostanie na miejscu.", "%s をライブラリから外しますか？ファイルはそのまま残ります。", "要将 %s 移出游戏库吗？文件保留原处。", "%s 을(를) 라이브러리에서 뺄까요? 파일은 그대로 남습니다.")
+#ifndef XE
+#define XE(id, en) X(id, en, en, en, en, en, en, en, en, en, en, en)
+#endif
+XE(S_DISK_CACHE, "Cache drive size (X: Y: Z:)")
+XE(S_DISK_E, "Hard disk size (E:)")
+XE(S_DISK_RETAIL, "Retail (5 GB)")
+X(S_GPU, "Graphics card", "Tarjeta gráfica", "Carte graphique", "Grafikkarte", "Scheda grafica", "Placa de vídeo", "Видеокарта", "Karta graficzna", "グラフィックスカード", "显卡", "그래픽 카드")
+X(S_GPU_AUTO, "Automatic (best)", "Automática (la mejor)", "Automatique (la meilleure)", "Automatisch (beste)", "Automatica (la migliore)", "Automática (a melhor)", "Авто (лучшая)", "Automatycznie (najlepsza)", "自動（最適）", "自动（最佳）", "자동(최적)")
+XE(S_GPU_NTH, "GPU %d (as the system lists them)")

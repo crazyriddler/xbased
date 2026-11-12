@@ -213,6 +213,16 @@ void scr_settings(void)
         rows_video(&l);
         opt_bool(&l, S_FULLSCREEN, "fullscreen", true, true);
         opt_bool(&l, S_SHOW_FPS, "showfps", false, false);
+        {
+            static const char *gv[] = {"auto", "1", "2", "3", "4"};
+            static char gnames[5][40];
+            const char *gn[5] = {T(S_GPU_AUTO)};
+            for (int i = 1; i < 5; i++) {
+                snprintf(gnames[i], sizeof(gnames[i]), T(S_GPU_NTH), i);
+                gn[i] = gnames[i];
+            }
+            opt_choice(&l, S_GPU, "gpu", gv, gn, 5, "auto");
+        }
         opt_bool(&l, S_VSYNC, "vsync", true, false);
         {
             /* full screen at the panel's highest refresh a multiple of 60
@@ -235,6 +245,14 @@ void scr_settings(void)
         opt_int(&l, S_VOLUME, "volume", 0, 100, 5, 100, "%");
         opt_bool(&l, S_MUTE_BG, "mutebg", true, false);
         opt_bool(&l, S_UI_SOUNDS, "ui.sounds", true, false);
+        {
+            static const char *ev[] = {"auto", "10240", "20480", "51200", "131072"};
+            const char *en[] = {T(S_DISK_RETAIL), "10 GB", "20 GB", "50 GB", "128 GB"};
+            opt_choice(&l, S_DISK_E, "hdd.mb", ev, en, 5, "auto");
+            static const char *cv[] = {"2048", "1024", "750", "4096", "8192"};
+            const char *cn[] = {"2 GB", "1 GB", "750 MB (retail)", "4 GB", "8 GB"};
+            opt_choice(&l, S_DISK_CACHE, "cache.mb", cv, cn, 5, "2048");
+        }
         break;
     }
     case 2: {

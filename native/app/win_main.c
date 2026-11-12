@@ -1734,6 +1734,35 @@ int main(int argc, char *argv[])
     g_nw.width = pw;
     g_nw.height = ph;
 
+    {
+        /* Settings > Video > Graphics card: the Nth Vulkan device (vkdev.c's HAKUX_GPU) */
+        char ip[MAX_PATH + 32];
+        snprintf(ip, sizeof(ip), "%sxbased.ini", g_data_dir);
+        Config gc;
+        cfg_load(&gc, ip);
+        const char *gv = cfg_get(&gc, "gpu");
+        if (gv && atoi(gv) > 0 && !getenv("HAKUX_GPU")) {
+            char b[16];
+            snprintf(b, sizeof(b), "%d", atoi(gv) - 1);
+#ifdef _WIN32
+            _putenv_s("HAKUX_GPU", b);
+#else
+            setenv("HAKUX_GPU", b, 0);
+#endif
+        }
+        /* Settings > System > disk sizes: what the title is told its drives hold (kernel/io.c) */
+        static const struct { const char *key, *env; } disks[] = {{"hdd.mb", "HAKUX_E_MB"}, {"cache.mb", "HAKUX_CACHE_MB"}};
+        for (int i = 0; i < 2; i++) {
+            const char *dv = cfg_get(&gc, disks[i].key);
+            if (dv && atoi(dv) > 0 && !getenv(disks[i].env)) {
+#ifdef _WIN32
+                _putenv_s(disks[i].env, dv);
+#else
+                setenv(disks[i].env, dv, 0);
+#endif
+            }
+        }
+    }
     if (!nc_present_init()) {
         return 1;
     }

@@ -221,6 +221,37 @@ static const uint64_t k_partitions[6][2] = {
 };
 static bool g_trace_io; /* NC_TRACE_IO: every read */
 
+/* The size a partition reports to the title (free-space checks, partition info).
+ * The folders have no limit of their own; this is only what a title is told.
+ * HAKUX_E_MB sets the data drive (E:), HAKUX_CACHE_MB each cache drive (X:, Y:, Z:);
+ * the dashboard's System settings write them. The retail layout is the default for
+ * E:; the cache drives are larger than the retail 750 MB, since a title that copies
+ * its data there and finds it "full" stops with a "not enough free blocks" message. */
+static uint64_t part_size(int part)
+{
+    static uint64_t e_mb, cache_mb;
+    static bool read;
+    if (!read) {
+        const char *e = getenv("HAKUX_E_MB"), *c = getenv("HAKUX_CACHE_MB");
+        e_mb = e ? strtoull(e, NULL, 10) : 0;
+        cache_mb = c ? strtoull(c, NULL, 10) : 0;
+        if (e_mb < 512 || e_mb > 2000000) {
+            e_mb = 0;
+        }
+        if (cache_mb < 256 || cache_mb > 2000000) {
+            cache_mb = 2048;
+        }
+        read = true;
+    }
+    if (part == 1 && e_mb) {
+        return e_mb << 20;
+    }
+    if (part >= 3 && part <= 5) {
+        return cache_mb << 20;
+    }
+    return k_partitions[part][1];
+}
+
 void nc_io_set_hdd_root(const char *path)
 {
     snprintf(g_hdd_root, sizeof(g_hdd_root), "%s", path);
@@ -2694,14 +2725,30 @@ static uint32_t volume_info(NcKernel *k, const NcFile *nf, uint32_t cls, uint32_
              * no limit: Riddick's file cache copies what it opens and never
              * asks, so it outgrows a 750 MB drive (on hardware it apparently
              * doesn't; how is open). */
-            const uint64_t cluster = (uint64_t)spu * 512u, size = k_partitions[part][1];
+            const uint64_t cluster = (uint64_t)spu * 512u;
             const uint64_t used = part_used(part);
+            uint64_t size = part_size(part);
+            /* The data drive on its automatic size never reads as full: what the
+             * folder holds (saves, installed homebrew, an OG dashboard's games)
+             * can pass the retail 5 GB, and a title that asks for free blocks
+             * before a new game then refuses ("not enough free blocks") on a drive
+             * that has the room. Always 4 GB over what is used. */
+            if (part == 1 && !getenv("HAKUX_E_MB") && size < used + (4ull << 30)) {
+                size = used + (4ull << 30);
+            }
             uint64_t free_part = used < size ? size - used : 0;
             if (freeb < free_part) {
                 free_part = freeb;
             }
             total = size / cluster;
             avail = free_part / cluster;
+            static unsigned logged;
+            if (!(logged & (1u << part))) {
+                logged |= 1u << part;
+                nc_log("hakuX-native-io", "volume info: partition %d, %llu MB of %llu MB free (used %llu MB, host free %llu MB)", part,
+                       (unsigned long long)(free_part >> 20), (unsigned long long)(size >> 20),
+                       (unsigned long long)(used >> 20), (unsigned long long)(freeb >> 20));
+            }
         }
         if (cls == 3) {
             len = 0x18;
@@ -3060,7 +3107,7 @@ static uint32_t disk_ioctl(const NcFile *nf, uint32_t code, uint8_t *out, uint32
         }
         memset(out, 0, 32);
         put64(out, k_partitions[part][0]);
-        put64(out + 8, part ? k_partitions[part][1] : HDD_BYTES);
+        put64(out + 8, part ? part_size(part) : HDD_BYTES);
         nc_wr32(out + 16, (uint32_t)(k_partitions[part][0] / 512));
         nc_wr32(out + 20, (uint32_t)part);
         out[26] = 1;
