@@ -106,6 +106,113 @@ bool sc_make(const char *name, const char *game, const char *icon_png, const cha
     return ok;
 }
 
+#elif defined(__APPLE__)
+#include <sys/stat.h>
+#include <unistd.h>
+
+static void sh_quote(const char *s, char *out, size_t n)
+{
+    size_t o = 0;
+    out[o++] = '\'';
+    for (; *s && o + 6 < n; s++) {
+        if (*s == '\'') {
+            memcpy(out + o, "'\\''", 4);
+            o += 4;
+        } else {
+            out[o++] = *s;
+        }
+    }
+    out[o++] = '\'';
+    out[o] = 0;
+}
+
+static bool write_text(const char *path, const char *text, mode_t mode)
+{
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        return false;
+    }
+    const bool ok = fputs(text, f) >= 0;
+    fclose(f);
+    chmod(path, mode);
+    return ok;
+}
+
+bool sc_make(const char *name, const char *game, const char *icon_png, const char *icon_ico, char *where,
+             size_t n)
+{
+    (void)icon_ico;
+    char exe[1024];
+    if (!nc_exe_path(exe, sizeof(exe))) {
+        return false;
+    }
+    const char *home = getenv("HOME");
+    if (!home) {
+        return false;
+    }
+    char fname[300], app[1400], dir[1500], path[1600];
+    file_name(name, fname, sizeof(fname));
+    snprintf(app, sizeof(app), "%s/Desktop/%s.app", home, fname);
+    snprintf(dir, sizeof(dir), "%s/Contents", app);
+    mkdir(app, 0755);
+    mkdir(dir, 0755);
+    snprintf(dir, sizeof(dir), "%s/Contents/MacOS", app);
+    mkdir(dir, 0755);
+    snprintf(dir, sizeof(dir), "%s/Contents/Resources", app);
+    mkdir(dir, 0755);
+    char qe[2200], qg[4400], script[7000];
+    sh_quote(exe, qe, sizeof(qe));
+    sh_quote(game, qg, sizeof(qg));
+    snprintf(script, sizeof(script), "#!/bin/sh\nexec %s %s\n", qe, qg);
+    snprintf(path, sizeof(path), "%s/Contents/MacOS/launch", app);
+    bool ok = write_text(path, script, 0755);
+    bool icon = false;
+    if (icon_png && *icon_png) {
+        char qi[2200], qo[2200], cmd[4600];
+        snprintf(path, sizeof(path), "%s/Contents/Resources/icon.icns", app);
+        sh_quote(icon_png, qi, sizeof(qi));
+        sh_quote(path, qo, sizeof(qo));
+        snprintf(cmd, sizeof(cmd), "sips -s format icns %s --out %s >/dev/null 2>&1", qi, qo);
+        icon = system(cmd) == 0;
+    }
+    char plist[3000], id[200];
+    size_t k = 0;
+    for (const char *c = fname; *c && k + 1 < sizeof(id); c++) {
+        const char ch = *c;
+        id[k++] = ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')) ? ch : '-';
+    }
+    id[k] = 0;
+    char xname[700];
+    size_t o = 0;
+    for (const char *c = name; *c && o + 7 < sizeof(xname); c++) {
+        const char *e = *c == '&' ? "&amp;" : *c == '<' ? "&lt;" : *c == '>' ? "&gt;" : NULL;
+        if (e) {
+            o += (size_t)snprintf(xname + o, sizeof(xname) - o, "%s", e);
+        } else {
+            xname[o++] = *c;
+        }
+    }
+    xname[o] = 0;
+    snprintf(plist, sizeof(plist),
+             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+             "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+             "<plist version=\"1.0\"><dict>\n"
+             "<key>CFBundleExecutable</key><string>launch</string>\n"
+             "<key>CFBundleIdentifier</key><string>io.github.crazyriddler.xbased.game.%s</string>\n"
+             "<key>CFBundleName</key><string>%s</string>\n"
+             "<key>CFBundlePackageType</key><string>APPL</string>\n"
+             "%s"
+             "<key>LSApplicationCategoryType</key><string>public.app-category.games</string>\n"
+             "</dict></plist>\n",
+             id, xname, icon ? "<key>CFBundleIconFile</key><string>icon</string>\n" : "");
+    snprintf(path, sizeof(path), "%s/Contents/Info.plist", app);
+    ok = ok && write_text(path, plist, 0644);
+    if (ok && where) {
+        snprintf(where, n, "%s", app);
+    }
+    return ok;
+}
+
 #else
 #include <sys/stat.h>
 #include <unistd.h>

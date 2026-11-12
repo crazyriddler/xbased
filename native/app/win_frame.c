@@ -1202,6 +1202,63 @@ void nc_frame_close(void *frame)
     }
 }
 
+#elif defined(__APPLE__)
+
+void nc_frame_fork(bool fullscreen, bool fs60)
+{
+    (void)fullscreen;
+    (void)fs60;
+}
+
+void *nc_frame_get(const char *title, bool fullscreen, bool fs60)
+{
+    (void)title;
+    (void)fullscreen;
+    (void)fs60;
+    return NULL;
+}
+
+void nc_frame_adopt(void *frame, SDL_Window *child, const char *title, bool hidden)
+{
+    (void)frame;
+    (void)child;
+    (void)title;
+    (void)hidden;
+}
+
+void nc_frame_fill(void *frame, SDL_Window *child)
+{
+    (void)frame;
+    (void)child;
+}
+
+const char *nc_frame_token(void)
+{
+    return NULL;
+}
+
+void nc_frame_raise(void *frame, SDL_Window *child)
+{
+    (void)frame;
+    (void)child;
+}
+
+void nc_frame_toggle_fullscreen(void *frame)
+{
+    (void)frame;
+}
+
+bool nc_frame_minimized(void *frame)
+{
+    (void)frame;
+    return false;
+}
+
+void nc_frame_close(void *frame)
+{
+    (void)frame;
+}
+
 #else /* ------------------------------------------------------------ Linux: X11 */
 
 #include <X11/Xlib.h>

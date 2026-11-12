@@ -362,6 +362,10 @@ static void fallback_fonts(void)
 #ifdef _WIN32
         "C:\\Windows\\Fonts\\msyh.ttc", "C:\\Windows\\Fonts\\YuGothM.ttc", "C:\\Windows\\Fonts\\malgun.ttf",
         "C:\\Windows\\Fonts\\msgothic.ttc", "C:\\Windows\\Fonts\\segoeui.ttf",
+#elif defined(__APPLE__)
+        "/System/Library/Fonts/Hiragino Sans GB.ttc", "/System/Library/Fonts/STHeiti Light.ttc",
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
 #else
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
