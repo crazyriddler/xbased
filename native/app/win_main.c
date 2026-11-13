@@ -33,6 +33,8 @@
 #include "native/app/ui/i18n.h"
 #include "native/app/ui/input_map.h"
 #include "native/app/ui/ui.h"
+#include "hw/xbox/hle/host.h"
+#include "hw/xbox/hle/pb/texpack.h"
 #include "hw/xbox/hle/vk/swapchain.h"
 #include "hw/xbox/hle/vk/share.h"
 #include "native/app/ui/xbox_data.h"
@@ -336,8 +338,37 @@ static void *g_frame;   /* the session's frame (win_frame.h), NULL: the run's wi
 static bool g_frame_hidden;     /* the run's window out of sight in it: the frame presents the pictures */
 static bool g_frame_keep;   /* this run ends for another (run_again): the frame stays */
 
+/* A run of the upscaler during the game (texauto.c): what was written out since the last. */
+static int SDLCALL texlive_thread(void *arg)
+{
+    (void)arg;
+    char note[2600];
+    const int n = nc_texauto_run(hle_texpack_dir(), g_exe_dir, g_data_dir, note, sizeof(note));
+    if (n > 0) {
+        nc_log("hakuX-app", "texture upscaling (while playing): %s", note);
+    } else if (n < 0) {
+        static bool said;
+        if (!said) {
+            said = true;
+            nc_log("hakuX-app", "texture upscaling: %s", note);
+        }
+    }
+    return 0;
+}
+
 static _Noreturn void exit_now(int code)
 {
+    /* automatic texture upscaling: what this run wrote out goes to the upscaler, which runs on after it */
+    if ((hle_host_texpack() & 4) && hle_texpack_dir()) {
+        char note[2600];
+        const int n = nc_texauto_run(hle_texpack_dir(), g_exe_dir, g_data_dir, note, sizeof(note));
+        if (n || note[0]) {
+            nc_log("hakuX-app", "texture upscaling: %s", note[0] ? note : "nothing new");
+        }
+        unsigned used = 0, refused = 0;
+        hle_texpack_counts(&used, &refused);
+        nc_log("hakuX-app", "texture upscaling: this run drew %u upscaled textures and refused %u", used, refused);
+    }
     const bool closing = g_frame && !(code & 0x40000000) && !g_frame_keep;
     if (closing) {
         nc_frame_close(g_frame);    /* the session's end: the frame hands the screen back to the dashboard */
@@ -852,6 +883,13 @@ static HANDLE g_ready_ev;       /* the run before this one waits on it (run_agai
 static int g_ready_fd = -1;     /* the run before this one waits on it (run_again, inside the frame) */
 #endif
 
+/* The refresh rate of the display the window is on, for the presenter (frame interpolation). */
+static void refresh_note(SDL_Window *w)
+{
+    const SDL_DisplayMode *m = w ? SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(w)) : NULL;
+    nc_present_set_refresh(m ? m->refresh_rate : 0.0f);
+}
+
 static void ov_present(void)
 {
     if (g_nw.width <= 0 || !nc_present_frame(&g_nw)) {
@@ -1100,8 +1138,23 @@ static void apply_cfg(const Config *global, const Config *game, bool sound)
         if ((v = cfg_get(c, "fxaa"))) {
             nc_present_set_fxaa(atoi(v) != 0);
         }
+        if ((v = cfg_get(c, "smaa"))) {
+            nc_present_set_smaa(atoi(v) != 0);
+        }
+        if ((v = cfg_get(c, "interp"))) {
+            nc_present_set_interp(atoi(v) != 0);
+        }
+        if ((v = cfg_get(c, "sharpen"))) {
+            nc_present_set_sharpen(atoi(v));
+        }
+        if ((v = cfg_get(c, "integer"))) {
+            nc_present_set_integer(atoi(v) != 0);
+        }
         if ((v = cfg_get(c, "upscale"))) {
             nc_present_set_upscale(nc_upscale_from_name(v));
+        }
+        if ((v = cfg_get(c, "nis.sharp"))) {
+            nc_present_set_nis_sharpness(atoi(v));
         }
         if ((v = cfg_get(c, "crt"))) {
             hle_present_set_crt(atoi(v));
@@ -1266,12 +1319,87 @@ static void state_request_poll(void)
 
 /* ------------------------------------------------------------- main */
 
+/* The log about to be written over, kept if it is a game's: moved to logs/ as "<date>-<time> <the disc's
+ * name>.log" (the time it was last written), the 40 newest kept. A crash is looked into from the log of the
+ * run it happened in, and that was gone as soon as another game started. */
+static void log_keep(const char *path)
+{
+    char head[16384];
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        return;
+    }
+    const size_t n = fread(head, 1, sizeof(head) - 1, f);
+    fclose(f);
+    head[n] = 0;
+    const char *d = strstr(head, "native core: disc ");
+    if (!d) {
+        return;                 /* the dashboard's own, or a run that never got to a game */
+    }
+    d += 18;
+    const char *e = strstr(d, ", hdd ");
+    const char *nl = strchr(d, '\n');
+    if (!e || (nl && nl < e)) {
+        e = nl ? nl : d + strlen(d);
+    }
+    const char *b = e;
+    while (b > d && b[-1] != '/' && b[-1] != '\\') {
+        b--;
+    }
+    char name[80];
+    size_t k = 0;
+    for (const char *p = b; p < e && k < sizeof(name) - 1; p++) {
+        const unsigned char c = (unsigned char)*p;
+        name[k++] = c < 32 || strchr("<>:\"/\\|?*", c) ? '_' : (char)c;
+    }
+    name[k] = 0;
+    char *dot = strrchr(name, '.');
+    if (dot && dot != name) {
+        *dot = 0;
+    }
+    char dir[MAX_PATH + 16], to[MAX_PATH + 160];
+    snprintf(dir, sizeof(dir), "%slogs", g_data_dir);
+    SDL_CreateDirectory(dir);
+    SDL_PathInfo pi;
+    SDL_DateTime dt;
+    if (!SDL_GetPathInfo(path, &pi) || !SDL_TimeToDateTime(pi.modify_time, &dt, true)) {
+        memset(&dt, 0, sizeof(dt));
+    }
+    snprintf(to, sizeof(to), "%s/%04d%02d%02d-%02d%02d%02d %s.log", dir, dt.year, dt.month, dt.day, dt.hour,
+             dt.minute, dt.second, name);
+    remove(to);
+    if (rename(path, to) != 0) {
+        return;
+    }
+    /* the names start with the time: sorted, the oldest come first */
+    int count = 0;
+    char **names = SDL_GlobDirectory(dir, "*.log", 0, &count);
+    for (int i = 0; names && i < count; i++) {
+        for (int j = i + 1; j < count; j++) {
+            if (strcmp(names[j], names[i]) < 0) {
+                char *t = names[i];
+                names[i] = names[j];
+                names[j] = t;
+            }
+        }
+    }
+    for (int i = 0; names && i < count - 40; i++) {
+        char old[MAX_PATH + 300];
+        snprintf(old, sizeof(old), "%s/%s", dir, names[i]);
+        remove(old);
+    }
+    SDL_free(names);
+}
+
 /* xbased.log beside the executable: a run the process started again (a
  * title's relaunch, a state loaded) goes on in the same log. */
 static void log_setup(bool console, bool again)
 {
     char path[MAX_PATH + 16];
     snprintf(path, sizeof(path), "%sxbased.log", g_data_dir);
+    if (!again) {
+        log_keep(path);
+    }
 #ifdef _WIN32
     if (console && AllocConsole()) {
         freopen("CONOUT$", "w", stdout);
@@ -1643,8 +1771,18 @@ int main(int argc, char *argv[])
             nc_present_set_crop(g_crop[0], g_crop[1]);
         } else if (!strncmp(a, "fxaa=", 5)) {
             nc_present_set_fxaa(atoi(a + 5) != 0);
+        } else if (!strncmp(a, "smaa=", 5)) {
+            nc_present_set_smaa(atoi(a + 5) != 0);
+        } else if (!strncmp(a, "interp=", 7)) {
+            nc_present_set_interp(atoi(a + 7) != 0);
+        } else if (!strncmp(a, "sharpen=", 8)) {
+            nc_present_set_sharpen(atoi(a + 8));
+        } else if (!strncmp(a, "integer=", 8)) {
+            nc_present_set_integer(atoi(a + 8) != 0);
         } else if (!strncmp(a, "upscale=", 8)) {
             nc_present_set_upscale(nc_upscale_from_name(a + 8));
+        } else if (!strncmp(a, "nis.sharp=", 10)) {
+            nc_present_set_nis_sharpness(atoi(a + 10));
         } else if (!strncmp(a, "crt=", 4)) {
             hle_present_set_crt(atoi(a + 4));
         } else if (!strncmp(a, "vsync=", 6)) {
@@ -1687,6 +1825,7 @@ int main(int argc, char *argv[])
         fatal_box("xbased", SDL_GetError());
         return 1;
     }
+    refresh_note(win);
     {
         /* the session's frame (win_frame.h): a run started again comes up
          * inside the same window; frame=0 the run's window on its own */
@@ -1901,6 +2040,10 @@ int main(int argc, char *argv[])
             case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
                 g_nw.width = ev.window.data1;
                 g_nw.height = ev.window.data2;
+                refresh_note(win);
+                break;
+            case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+                refresh_note(win);
                 break;
             case SDL_EVENT_WINDOW_MINIMIZED:
             case SDL_EVENT_WINDOW_RESTORED:
@@ -1960,6 +2103,29 @@ int main(int argc, char *argv[])
             }
         }
         overlay_tick();
+        {
+            /* the upscaler beside the game: every ten seconds what the game wrote out since goes to it (on a
+             * thread: listing the folder takes a moment), unless one is still running */
+            static Uint64 last;
+            const Uint64 now = SDL_GetTicks();
+            if ((hle_host_texpack() & 12) == 12 && hle_texpack_dir() && now - last >= 10000) {
+                last = now;
+                SDL_Thread *t = SDL_CreateThread(texlive_thread, "texlive", NULL);
+                if (t) {
+                    SDL_DetachThread(t);
+                }
+            }
+        }
+        {
+            /* automatic texture upscaling: the disc looked through for textures, once, beside the game */
+            static bool scanned;
+            if (!scanned && (hle_host_texpack() & 4) && hle_texpack_dir()) {
+                scanned = true;
+                if (nc_texscan_start(g_disc, hle_texpack_dir())) {
+                    nc_log("hakuX-app", "texture scan: reading %s for textures (in the background)", g_disc);
+                }
+            }
+        }
         if (minimized || g_nw.width <= 0 || !nc_present_frame(&g_nw)) {
             SDL_Delay(8); /* nothing to wait for the display on */
         }

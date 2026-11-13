@@ -50,11 +50,16 @@
 
 #define T (g_ps.t)
 #define PS_FRAMES 3             /* the presenter's submits in flight */
-enum { SET_WINDOW, SET_FXAA, SET_EASU, SET_OSD, PS_SETS };  /* a frame's descriptor sets */
+/* a frame's descriptor sets: the first five of the plain layout, the rest (SMAA's weights and blend, the
+ * interpolation's motion and mix) of the one with the extra samplers, made at first use (x_init) */
+enum { SET_WINDOW, SET_FXAA, SET_EASU, SET_OSD, SET_COPY, SET_SHARP, SET_X0, SET_X1, SET_X2, SET_X3, SET_X4, SET_X5, SET_X6, SET_X7,
+       PS_SETS };
 #define PS_RAMP 1024            /* a frame's share of the ramp buffer (768 used) */
 
 /* the window's pipelines, then those into images of ours (R8G8B8A8) */
-enum { P_BILINEAR, P_AREA, P_RCAS, P_CRT, P_OSD, P_KDOWN, P_KUP, P_FXAA, P_EASU, P_COUNT };
+enum { P_BILINEAR, P_AREA, P_RCAS, P_CRT, P_OSD, P_KDOWN, P_KUP, P_FXAA, P_EASU, P_NIS,
+       P_SM_EDGE, P_SM_WT, P_SM_BLEND, P_IL_ME, P_IL_MIX, P_COPY, P_IL_DOWN, P_IL_HALF, P_IL_LV,
+       P_SHARP, P_COUNT };   /* from P_SM_EDGE on: made at first use */
 
 /* An image of ours a pass draws into and the window's pass samples. */
 typedef struct PsImg {
@@ -64,7 +69,9 @@ typedef struct PsImg {
     uint32_t w, h;
     VkFormat fmt;
     uint64_t serial;            /* the frame it holds (0: none) */
-    bool fxaa;                  /* FSR's: made from FXAA's */
+    unsigned fxaa;              /* FSR's: made from this anti-aliasing's (0 none, 1 FXAA, 2 SMAA) */
+    unsigned kind;              /* which pass made it: 0 FSR's EASU, else NIS's with its sharpness (1 + percent);
+                                 * of the anti-aliased image: 1 FXAA, 2 SMAA */
 } PsImg;
 
 typedef struct PsFrame {
@@ -95,8 +102,8 @@ static struct {
     uint64_t submitted;
     VkSampler smp;
     VkSampler smp_near;         /* the picture's, upscaled as nearest neighbour (HLE_UPSCALE_NEAREST) */
-    VkDescriptorSetLayout dsl;
-    VkPipelineLayout pl;
+    VkDescriptorSetLayout dsl, dslx;    /* dslx: with two more samplers (x_init) */
+    VkPipelineLayout pl, plx;
     VkDescriptorPool dp;
     VkBuffer ubo;
     VkDeviceMemory ubo_mem;
@@ -126,6 +133,28 @@ static struct {
     uint64_t serial;            /* frames taken */
     /* FXAA's image (the frame's size), FSR's (the frame's in the window) */
     PsImg fx, up;
+    PsImg sh;                   /* the frame sharpened (P_SHARP), when no upscaler does it; kind: the strength */
+    /* SMAA (smaa.inc): its edges and blend weights (the frame's size) and lookup tables, uploaded once */
+    PsImg sm_edge, sm_wt, sm_area, sm_search;
+    bool sm_tried, sm_loaded;
+    unsigned x_state;           /* the extra-sampler layout: 0 not tried, 1 made, 2 failed */
+    VkBuffer sm_stage;          /* the tables' staging (kept: 180 KB) */
+    VkDeviceMemory sm_stage_mem;
+    uint8_t *sm_stage_map;
+    VkDeviceSize sm_stage_size;
+    /* frame interpolation's motion search goes from coarse to fine: the frame and the one before at a half and
+     * a quarter of the console's size (il_l1, il_l2; [il_k] the frame's, the other the one before's), and the
+     * motion found on the quarter (il_mva) and then the half (il_mvb) */
+    PsImg il_l1[2], il_l2[2], il_mva, il_mvb;
+    unsigned il_k;
+    int64_t refresh_ns;             /* the display's refresh period (hle_present_set_refresh); 0 unknown */
+    /* frame interpolation: the frame before the one shown (il_pv, a copy), the blocks' motion (il_mv), the
+     * in-between frame (il_mid); the in-between is shown for half a frame's time (il_due), then the frame */
+    PsImg il_pv, il_mv, il_mid;
+    bool il_tried, il_pending, il_logged;
+    bool il_shown;              /* the in-between frame is on the display: nothing more to show until il_due */
+    uint64_t il_serial;         /* the frame it last took in */
+    int64_t il_t_new, il_due;
     /* the display's gamma ramp */
     uint8_t ramp[3][256];
     uint32_t ramp_gen;
@@ -519,6 +548,373 @@ static const char k_fs_rcas[] =
     "  o = ramp((lobe * (b + d + h + f) + e) / (4.0 * lobe + 1.0));\n"
     "}\n";
 
+/* The same sharpening over a frame at its own size, into an image (no gamma ramp: that is the window pass's):
+ * for a picture no upscaler sharpens. extra.x the sharpness, as RCAS's. */
+static const char k_fs_sharp[] =
+    "// Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved. (MIT)\n"
+    "vec3 at(ivec2 p, ivec2 top) { return texelFetch(u_tex, clamp(p, ivec2(0), top), 0).rgb; }\n"
+    "void main() {\n"
+    "  ivec2 top = textureSize(u_tex, 0) - 1;\n"
+    "  ivec2 sp = clamp(ivec2(v_uv * vec2(top + 1)), ivec2(0), top);\n"
+    "  vec3 b = at(sp + ivec2(0, -1), top), d = at(sp + ivec2(-1, 0), top), e = at(sp, top);\n"
+    "  vec3 f = at(sp + ivec2(1, 0), top), h = at(sp + ivec2(0, 1), top);\n"
+    "  vec3 mn4 = min(min(b, d), min(f, h)), mx4 = max(max(b, d), max(f, h));\n"
+    "  vec3 hitMin = min(mn4, e) / max(4.0 * mx4, vec3(1e-6));\n"
+    "  vec3 hitMax = (1.0 - max(mx4, e)) / min(4.0 * mn4 - 4.0, vec3(-1e-6));\n"
+    "  vec3 lobeC = max(-hitMin, hitMax);\n"
+    "  float lobe = max(-(0.25 - 1.0 / 16.0), min(max(lobeC.r, max(lobeC.g, lobeC.b)), 0.0)) * pc.extra.x;\n"
+    "  o = vec4(clamp((lobe * (b + d + h + f) + e) / (4.0 * lobe + 1.0), 0.0, 1.0), 1.0);\n"
+    "}\n";
+
+#include "hw/xbox/hle/vk/nis_coef.inc"
+/* NVIDIA Image Scaling (NIS_Scaler.h's NVScaler, MIT: licenses/nvidia-nis.license.txt) as a fragment
+ * pass: the SDK's compute shader shares a tile of luma and its edge map between a block's threads;
+ * here each output pixel gathers its own 6x6 luma support (the tile's p[0][0] is texel floor(src) - 2) and
+ * works the 2x2 edge map around it out itself, the same arithmetic otherwise. The scale is 1 to 2
+ * (the SDK's range; swapchain.c leaves larger ones to FSR). extra = the frame's width and height,
+ * the image's width plus the sharpness (percent / 128, in the fraction) and its height. */
+static const char k_fs_nis[] =
+    "const float kDetectRatio = 2.0 * 1127.0 / 1024.0, kDetectThres = 64.0 / 1024.0;\n"
+    "const float kMinContrastRatio = 2.0, kRatioNorm = 1.0 / 8.0, kContrastBoost = 1.0, kEps = 1.0 / 255.0;\n"
+    "const float kSharpStartY = 0.45, kSharpScaleY = 1.0 / 0.45;\n"
+    "float kSharpStrengthMin, kSharpStrengthScale, kSharpLimitMin, kSharpLimitScale;\n"
+    "float getY(vec3 c) { return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b; }\n"
+    "vec4 edgeMap(float p[6][6], int i, int j) {\n"
+    "  float g0 = abs(p[0 + i][0 + j] + p[0 + i][1 + j] + p[0 + i][2 + j] - p[2 + i][0 + j] - p[2 + i][1 + j] - p[2 + i][2 + j]);\n"
+    "  float g45 = abs(p[1 + i][0 + j] + p[0 + i][0 + j] + p[0 + i][1 + j] - p[2 + i][1 + j] - p[2 + i][2 + j] - p[1 + i][2 + j]);\n"
+    "  float g90 = abs(p[0 + i][0 + j] + p[1 + i][0 + j] + p[2 + i][0 + j] - p[0 + i][2 + j] - p[1 + i][2 + j] - p[2 + i][2 + j]);\n"
+    "  float g135 = abs(p[1 + i][0 + j] + p[2 + i][0 + j] + p[2 + i][1 + j] - p[0 + i][1 + j] - p[0 + i][2 + j] - p[1 + i][2 + j]);\n"
+    "  float g0_90_max = max(g0, g90), g0_90_min = min(g0, g90);\n"
+    "  float g45_135_max = max(g45, g135), g45_135_min = min(g45, g135);\n"
+    "  if (g0_90_max + g45_135_max == 0.0) return vec4(0.0);\n"
+    "  float e_0_90 = min(g0_90_max / (g0_90_max + g45_135_max), 1.0);\n"
+    "  float e_45_135 = 1.0 - e_0_90;\n"
+    "  bool c_0_90 = (g0_90_max > (g0_90_min * kDetectRatio)) && (g0_90_max > kDetectThres) && (g0_90_max > g45_135_min);\n"
+    "  bool c_45_135 = (g45_135_max > (g45_135_min * kDetectRatio)) && (g45_135_max > kDetectThres) && (g45_135_max > g0_90_min);\n"
+    "  bool c_g_0_90 = g0_90_max == g0;\n"
+    "  bool c_g_45_135 = g45_135_max == g45;\n"
+    "  float f_e_0_90 = (c_0_90 && c_45_135) ? e_0_90 : 1.0;\n"
+    "  float f_e_45_135 = (c_0_90 && c_45_135) ? e_45_135 : 1.0;\n"
+    "  return vec4((c_0_90 && c_g_0_90) ? f_e_0_90 : 0.0, (c_0_90 && !c_g_0_90) ? f_e_0_90 : 0.0,\n"
+    "              (c_45_135 && c_g_45_135) ? f_e_45_135 : 0.0, (c_45_135 && !c_g_45_135) ? f_e_45_135 : 0.0);\n"
+    "}\n"
+    "float calcLTI(float p0, float p1, float p2, float p3, float p4, float p5, int phase) {\n"
+    "  bool selector = phase <= 32;\n"
+    "  float sel = selector ? p0 : p3;\n"
+    "  float a_min = min(min(p1, p2), sel), a_max = max(max(p1, p2), sel);\n"
+    "  sel = selector ? p2 : p5;\n"
+    "  float b_min = min(min(p3, p4), sel), b_max = max(max(p3, p4), sel);\n"
+    "  float a_cont = a_max - a_min, b_cont = b_max - b_min;\n"
+    "  float cont_ratio = max(a_cont, b_cont) / (min(a_cont, b_cont) + kEps);\n"
+    "  return (1.0 - clamp((cont_ratio - kMinContrastRatio) * kRatioNorm, 0.0, 1.0)) * kContrastBoost;\n"
+    "}\n"
+    "float evalPoly6(float pxl[6], int phase) {\n"
+    "  float y = 0.0, y_usm = 0.0;\n"
+    "  for (int i = 0; i < 6; ++i) {\n"
+    "    y += NIS_COEF_SCALE[phase * 6 + i] * pxl[i];\n"
+    "    y_usm += NIS_COEF_USM[phase * 6 + i] * pxl[i];\n"
+    "  }\n"
+    "  float y_scale = 1.0 - clamp((y - kSharpStartY) * kSharpScaleY, 0.0, 1.0);\n"
+    "  float y_sharpness = y_scale * kSharpStrengthScale + kSharpStrengthMin;\n"
+    "  y_usm *= y_sharpness;\n"
+    "  float y_sharpness_limit = (y_scale * kSharpLimitScale + kSharpLimitMin) * y;\n"
+    "  y_usm = min(y_sharpness_limit, max(-y_sharpness_limit, y_usm));\n"
+    "  y_usm *= calcLTI(pxl[0], pxl[1], pxl[2], pxl[3], pxl[4], pxl[5], phase);\n"
+    "  return y + y_usm;\n"
+    "}\n"
+    "float filterNormal(float p[6][6], int px, int py) {\n"
+    "  float cv[6], ch[6];\n"
+    "  for (int k = 0; k < 6; ++k) {\n"
+    "    cv[k] = NIS_COEF_SCALE[py * 6 + k];\n"
+    "    ch[k] = NIS_COEF_SCALE[px * 6 + k];\n"
+    "  }\n"
+    "  float h_acc = 0.0;\n"
+    "  for (int j = 0; j < 6; ++j) {\n"
+    "    float v_acc = 0.0;\n"
+    "    for (int i = 0; i < 6; ++i) v_acc += p[i][j] * cv[i];\n"
+    "    h_acc += v_acc * ch[j];\n"
+    "  }\n"
+    "  return h_acc;\n"
+    "}\n"
+    "float addDirFilters(float p[6][6], float fx, float fy, int fxi, int fyi, vec4 w) {\n"
+    "  float f = 0.0;\n"
+    "  if (w.x > 0.0) {\n"
+    "    float t[6];\n"
+    "    for (int i = 0; i < 6; ++i) t[i] = mix(p[i][2], p[i][3], fx);\n"
+    "    f += evalPoly6(t, fyi) * w.x;\n"
+    "  }\n"
+    "  if (w.y > 0.0) {\n"
+    "    float t[6];\n"
+    "    for (int i = 0; i < 6; ++i) t[i] = mix(p[2][i], p[3][i], fy);\n"
+    "    f += evalPoly6(t, fxi) * w.y;\n"
+    "  }\n"
+    "  if (w.z > 0.0) {\n"
+    "    float b = 0.5 + 0.5 * (fx - fy);\n"
+    "    float t7[7];\n"
+    "    t7[1] = mix(p[2][1], p[1][2], b);\n"
+    "    t7[3] = mix(p[3][2], p[2][3], b);\n"
+    "    t7[5] = mix(p[4][3], p[3][4], b);\n"
+    "    b -= 0.5;\n"
+    "    float a0 = (b >= 0.0) ? p[0][2] : p[2][0], b0 = (b >= 0.0) ? p[1][3] : p[3][1];\n"
+    "    float c0 = (b >= 0.0) ? p[2][4] : p[4][2], d0 = (b >= 0.0) ? p[3][5] : p[5][3];\n"
+    "    t7[0] = mix(p[1][1], a0, abs(b));\n"
+    "    t7[2] = mix(p[2][2], b0, abs(b));\n"
+    "    t7[4] = mix(p[3][3], c0, abs(b));\n"
+    "    t7[6] = mix(p[4][4], d0, abs(b));\n"
+    "    float t[6];\n"
+    "    float ph = fx + fy;\n"
+    "    int s = 0;\n"
+    "    if (ph >= 1.0) { s = 1; ph -= 1.0; }\n"
+    "    for (int i = 0; i < 6; i++) t[i] = t7[i + s];\n"
+    "    f += evalPoly6(t, min(int(ph * 64.0), 63)) * w.z;\n"
+    "  }\n"
+    "  if (w.w > 0.0) {\n"
+    "    float b = 0.5 * (fx + fy);\n"
+    "    float t7[7];\n"
+    "    t7[1] = mix(p[3][1], p[4][2], b);\n"
+    "    t7[3] = mix(p[2][2], p[3][3], b);\n"
+    "    t7[5] = mix(p[1][3], p[2][4], b);\n"
+    "    b -= 0.5;\n"
+    "    float a0 = (b >= 0.0) ? p[5][2] : p[3][0], b0 = (b >= 0.0) ? p[4][3] : p[2][1];\n"
+    "    float c0 = (b >= 0.0) ? p[3][4] : p[1][2], d0 = (b >= 0.0) ? p[2][5] : p[0][3];\n"
+    "    t7[0] = mix(p[4][1], a0, abs(b));\n"
+    "    t7[2] = mix(p[3][2], b0, abs(b));\n"
+    "    t7[4] = mix(p[2][3], c0, abs(b));\n"
+    "    t7[6] = mix(p[1][4], d0, abs(b));\n"
+    "    float t[6];\n"
+    "    float ph = 1.0 + (fx - fy);\n"
+    "    int s = 0;\n"
+    "    if (ph >= 1.0) { s = 1; ph -= 1.0; }\n"
+    "    for (int i = 0; i < 6; i++) t[i] = t7[i + s];\n"
+    "    f += evalPoly6(t, min(int(ph * 64.0), 63)) * w.w;\n"
+    "  }\n"
+    "  return f;\n"
+    "}\n"
+    "void main() {\n"
+    "  vec2 inSz = pc.extra.xy;\n"
+    "  float outW = floor(pc.extra.z), sharp = (pc.extra.z - outW) * (128.0 / 100.0);\n"
+    "  vec2 scale = inSz / vec2(outW, pc.extra.w);\n"
+    "  float slider = sharp - 0.5;\n"
+    "  float maxScale = slider >= 0.0 ? 1.25 : 1.75, minScale = slider >= 0.0 ? 1.25 : 1.0, limScale = slider >= 0.0 ? 1.25 : 1.0;\n"
+    "  kSharpStrengthMin = max(0.0, 0.4 + slider * minScale * 1.2);\n"
+    "  kSharpStrengthScale = 1.6 + slider * maxScale * 1.8 - kSharpStrengthMin;\n"
+    "  kSharpLimitMin = max(0.1, 0.14 + slider * limScale * 0.32);\n"
+    "  kSharpLimitScale = 0.5 + slider * limScale * 0.6 - kSharpLimitMin;\n"
+    "  vec2 src = (floor(gl_FragCoord.xy) + 0.5) * scale - 0.5;\n"
+    "  vec2 fl = floor(src), fr = src - fl;\n"
+    "  ivec2 base = ivec2(fl), top = ivec2(inSz) - 1;\n"
+    "  int fxi = min(int(fr.x * 64.0), 63), fyi = min(int(fr.y * 64.0), 63);\n"
+    "  float p[6][6];\n"
+    "  /* the 6x6 support as nine 2x2 gathers of each channel (27 gathers where there were 36 fetches);\n"
+    "   * a gather's x y z w are the block's bottom-left, bottom-right, top-right and top-left texels, the edge\n"
+    "   * ones clamped as a fetch's are */\n"
+    "  vec2 g0 = (vec2(base) + vec2(-1.0)) / inSz;\n"
+    "  for (int b = 0; b < 3; ++b)\n"
+    "    for (int a = 0; a < 3; ++a) {\n"
+    "      vec2 at = g0 + vec2(2.0 * float(a), 2.0 * float(b)) / inSz;\n"
+    "      vec4 r = textureGather(u_tex, at, 0), g = textureGather(u_tex, at, 1), bl = textureGather(u_tex, at, 2);\n"
+    "      vec4 y = 0.2126 * r + 0.7152 * g + 0.0722 * bl;\n"
+    "      p[2 * b][2 * a] = y.w;\n"
+    "      p[2 * b][2 * a + 1] = y.z;\n"
+    "      p[2 * b + 1][2 * a] = y.x;\n"
+    "      p[2 * b + 1][2 * a + 1] = y.y;\n"
+    "    }\n"
+    "  vec4 e00 = edgeMap(p, 1, 1), e01 = edgeMap(p, 1, 2), e10 = edgeMap(p, 2, 1), e11 = edgeMap(p, 2, 2);\n"
+    "  vec4 w = mix(mix(e00, e01, fr.x), mix(e10, e11, fr.x), fr.y);\n"
+    "  float bw = 1.0 - w.x - w.y - w.z - w.w;\n"
+    "  float opY = (bw > 0.0 ? filterNormal(p, fxi, fyi) * bw : 0.0) + addDirFilters(p, fr.x, fr.y, fxi, fyi, w);\n"
+    "  vec3 op = textureLod(u_tex, (src + 0.5) / inSz, 0.0).rgb;\n"
+    "  o = vec4(clamp(op + (opY - getY(op)), 0.0, 1.0), 1.0);\n"
+    "}\n";
+
+/* ---- SMAA 1x (smaa.inc) and frame interpolation: the passes' shaders ----
+ *
+ * Their samplers beyond u_tex: u_tex2 and u_tex3, in the layout of x_init. SMAA's own functions take the vertex
+ * stage's offsets from its VS functions, called here in the fragment shader; its "point" samples are taken
+ * at texel centres, where the one linear sampler gives the same. */
+static const char k_fs_x[] =
+    "layout(set = 0, binding = 2) uniform sampler2D u_tex2;\n"
+    "layout(set = 0, binding = 3) uniform sampler2D u_tex3;\n";
+static const char k_smaa_pre[] =
+    "#define SMAA_GLSL_4 1\n"
+    "#define SMAA_PRESET_HIGH 1\n"
+    "#define SMAA_RT_METRICS smaa_metrics()\n"
+    "vec4 smaa_metrics() { vec2 s = vec2(textureSize(u_tex, 0)); return vec4(1.0 / s, s); }\n";
+/* edges from the frame's luma (u_tex) */
+static const char k_fs_sm_edge[] =
+    "void main() {\n"
+    "  vec4 off[3];\n"
+    "  SMAAEdgeDetectionVS(v_uv, off);\n"
+    "  o = vec4(SMAALumaEdgeDetectionPS(v_uv, off, u_tex), 0.0, 0.0);\n"
+    "}\n";
+/* blend weights from the edges (u_tex), the area table (u_tex2), the search table (u_tex3) */
+static const char k_fs_sm_wt[] =
+    "void main() {\n"
+    "  vec4 off[3];\n"
+    "  vec2 pix;\n"
+    "  SMAABlendingWeightCalculationVS(v_uv, pix, off);\n"
+    "  o = SMAABlendingWeightCalculationPS(v_uv, pix, off, u_tex, u_tex2, u_tex3, vec4(0.0));\n"
+    "}\n";
+/* the frame (u_tex) blended by the weights (u_tex2) */
+static const char k_fs_sm_blend[] =
+    "void main() {\n"
+    "  vec4 off;\n"
+    "  SMAANeighborhoodBlendingVS(v_uv, off);\n"
+    "  o = vec4(SMAANeighborhoodBlendingPS(v_uv, off, u_tex, u_tex2).rgb, 1.0);\n"
+    "}\n";
+/* a plain copy (the frame kept for the next in-between) */
+static const char k_fs_copy[] =
+    "void main() {\n"
+    "  o = vec4(texture(u_tex, v_uv).rgb, 1.0);\n"
+    "}\n";
+/* Frame interpolation's motion search, coarse to fine, one block (8 console pixels square) a pixel of the motion
+ * images. A search on the full picture alone reached 16 console pixels a frame, and its 2-pixel steps on point
+ * samples lost fine texture (a shift of an odd number of pixels matched nowhere); on smaller, averaged pictures a
+ * step is a texel and the reach is 40.
+ *
+ * The frame at 1 / extra.x of its size, each pixel the average of that many across (16 bilinear samples). */
+static const char k_fs_ildown[] =
+    "void main() {\n"
+    "  vec2 size = vec2(textureSize(u_tex, 0));\n"
+    "  vec3 s = vec3(0.0);\n"
+    "  for (int k = 0; k < 16; k++) {\n"
+    "    vec2 t = (vec2(float(k & 3), float(k >> 2)) + 0.5) * 0.25 - 0.5;\n"
+    "    s += textureLod(u_tex, v_uv + t * pc.extra.x / size, 0.0).rgb;\n"
+    "  }\n"
+    "  o = vec4(s * 0.0625, 1.0);\n"
+    "}\n";
+/* The motion of each block on one level: the frame (u_tex) and the one before (u_tex2) at 1 / extra.y of the
+ * frame's size, a block extra.x frame pixels. The best of the shifts of whole texels up to extra.z each way,
+ * around the level above's answer (u_tex3, with extra.w set; else around none), judged on 4 x 4 texels' luma
+ * with a small lean to the still (a share of the difference, so a dim picture is searched as a bright one).
+ * Written in frame pixels. */
+static const char k_fs_illv[] =
+    "float lum(sampler2D t, vec2 p, vec2 size) { return dot(textureLod(t, p / size, 0.0).rgb, vec3(0.299, 0.587, 0.114)); }\n"
+    "void main() {\n"
+    "  vec2 size = vec2(textureSize(u_tex, 0));\n"
+    "  float B = pc.extra.x, cell = pc.extra.y;\n"
+    "  int R = int(pc.extra.z);\n"
+    "  vec2 c = (floor(gl_FragCoord.xy) + 0.5) * B / cell;\n"
+    "  vec2 v0 = vec2(0.0);\n"
+    "  if (pc.extra.w > 0.5) { v0 = texelFetch(u_tex3, ivec2(gl_FragCoord.xy), 0).rg; }\n"
+    "  float cur[16];\n"
+    "  for (int k = 0; k < 16; k++) {\n"
+    "    cur[k] = lum(u_tex, c + vec2(float(k & 3), float(k >> 2)) - 1.5, size);\n"
+    "  }\n"
+    "  float px = 8.0 / B;\n"
+    "  float best = 1e9;\n"
+    "  vec2 bv = v0;\n"
+    "  for (int j = -R; j <= R; j++) {\n"
+    "    for (int i = -R; i <= R; i++) {\n"
+    "      vec2 d = v0 + vec2(float(i), float(j)) * cell;\n"
+    "      float sad = 0.0;\n"
+    "      for (int k = 0; k < 16; k++) {\n"
+    "        sad += abs(cur[k] - lum(u_tex2, c + vec2(float(k & 3), float(k >> 2)) - 1.5 - d / cell, size));\n"
+    "      }\n"
+    "      float far = (abs(d.x) + abs(d.y)) * px;\n"
+    "      sad = sad * (1.0 + 0.004 * far) + 0.001 * far;\n"
+    "      if (sad < best) { best = sad; bv = d; }\n"
+    "    }\n"
+    "  }\n"
+    "  o = vec4(bv, 0.0, 1.0);\n"
+    "}\n";
+/* The last step, on the frame (u_tex) and the one before (u_tex2) themselves: around the half-size level's answer
+ * (u_tex3), two refinements on 64 samples of the block (extra.x pixels), a pixel's step (half of extra.y) over
+ * 5 x 5 shifts and half a pixel's over 3 x 3 (the centre kept unless another is better), for the shift to the
+ * half pixel the in-between frame needs. Written in frame pixels. */
+static const char k_fs_ilme[] =
+    "float lum(vec2 p, sampler2D t, vec2 size) { return dot(textureLod(t, p / size, 0.0).rgb, vec3(0.299, 0.587, 0.114)); }\n"
+    "void main() {\n"
+    "  vec2 size = vec2(textureSize(u_tex, 0));\n"
+    "  float B = pc.extra.x, stp = pc.extra.y;\n"
+    "  vec2 c = (floor(gl_FragCoord.xy) + 0.5) * B;\n"
+    "  vec2 bv = texelFetch(u_tex3, ivec2(gl_FragCoord.xy), 0).rg;\n"
+    "  float c8[64];\n"
+    "  for (int k = 0; k < 64; k++) {\n"
+    "    c8[k] = lum(c + (vec2(float(k & 7), float(k >> 3)) - 3.5) * (B * 0.125), u_tex, size);\n"
+    "  }\n"
+    "  for (int stage = 0; stage < 2; stage++) {\n"
+    "    float st = stage == 0 ? 0.5 * stp : 0.25 * stp;\n"
+    "    int r = stage == 0 ? 2 : 1, n1 = 2 * r + 1;\n"
+    "    vec2 b0 = bv;\n"
+    "    float bs = 1e9;\n"
+    "    for (int n = -1; n < n1 * n1; n++) {\n"
+    "      vec2 d = b0;\n"
+    "      if (n >= 0) { d += vec2(float(n % n1 - r), float(n / n1 - r)) * st; }\n"
+    "      float sad = 0.0;\n"
+    "      for (int k = 0; k < 64; k++) {\n"
+    "        vec2 p = c + (vec2(float(k & 7), float(k >> 3)) - 3.5) * (B * 0.125) - d;\n"
+    "        sad += abs(c8[k] - lum(p, u_tex2, size));\n"
+    "      }\n"
+    "      if (sad < bs - 0.0001) { bs = sad; bv = d; }\n"
+    "    }\n"
+    "  }\n"
+    "  o = vec4(bv, 0.0, 1.0);\n"
+    "}\n";
+/* The frame between the previous (u_tex2) and this one (u_tex), from the block motions (u_tex3, in frame
+ * pixels; extra.y a block's size). Each pixel takes, of the four nearest blocks' motions and
+ * none, the one on which the two frames agree best around it (so a block's edge doesn't drag its neighbour's
+ * motion over it), and is this frame moved half-way back along it, read with a Catmull-Rom filter. It was the
+ * average of both frames, which kept under half of a detailed picture's finest detail (each frame has its own
+ * aliasing and dither pattern, and any shift by part of a pixel softens): sharp, soft, sharp, a flicker on
+ * distant textures. One frame alone keeps its pattern, and the half-way shift is pulled toward whole pixels
+ * (by an eighth of a pixel at most), where reading it loses nothing. Where the two frames disagree (around the
+ * pixel, or at it) it is this frame unmoved, so a wrong motion shows the frame itself early. */
+static const char k_fs_ilmix[] =
+    "vec3 cr(sampler2D t, vec2 uv) {\n"
+    "  vec2 size = vec2(textureSize(t, 0));\n"
+    "  vec2 pos = uv * size;\n"
+    "  vec2 c = floor(pos - 0.5) + 0.5;\n"
+    "  vec2 f = pos - c;\n"
+    "  vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));\n"
+    "  vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);\n"
+    "  vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));\n"
+    "  vec2 w3 = f * f * (-0.5 + 0.5 * f);\n"
+    "  vec2 w12 = w1 + w2;\n"
+    "  vec2 p0 = (c - 1.0) / size, p3 = (c + 2.0) / size, p12 = (c + w2 / w12) / size;\n"
+    "  vec3 r = textureLod(t, vec2(p0.x, p0.y), 0.0).rgb * (w0.x * w0.y) + textureLod(t, vec2(p12.x, p0.y), 0.0).rgb * (w12.x * w0.y) +\n"
+    "           textureLod(t, vec2(p3.x, p0.y), 0.0).rgb * (w3.x * w0.y) + textureLod(t, vec2(p0.x, p12.y), 0.0).rgb * (w0.x * w12.y) +\n"
+    "           textureLod(t, vec2(p12.x, p12.y), 0.0).rgb * (w12.x * w12.y) + textureLod(t, vec2(p3.x, p12.y), 0.0).rgb * (w3.x * w12.y) +\n"
+    "           textureLod(t, vec2(p0.x, p3.y), 0.0).rgb * (w0.x * w3.y) + textureLod(t, vec2(p12.x, p3.y), 0.0).rgb * (w12.x * w3.y) +\n"
+    "           textureLod(t, vec2(p3.x, p3.y), 0.0).rgb * (w3.x * w3.y);\n"
+    "  return clamp(r, 0.0, 1.0);\n"
+    "}\n"
+    "void main() {\n"
+    "  vec2 size = vec2(textureSize(u_tex, 0));\n"
+    "  float B = pc.extra.y;\n"
+    "  ivec2 nb = textureSize(u_tex3, 0);\n"
+    "  ivec2 b0 = ivec2(floor(v_uv * size / B - 0.5));\n"
+    "  vec2 cand[5];\n"
+    "  for (int k = 0; k < 4; k++) {\n"
+    "    ivec2 bi = clamp(b0 + ivec2(k & 1, k >> 1), ivec2(0), nb - 1);\n"
+    "    cand[k] = texelFetch(u_tex3, bi, 0).rg;\n"
+    "  }\n"
+    "  cand[4] = vec2(0.0);\n"
+    "  const vec2 offs[5] = vec2[5](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0));\n"
+    "  float best = 1e9;\n"
+    "  vec2 bm = vec2(0.0);\n"
+    "  for (int k = 0; k < 5; k++) {\n"
+    "    float e = 0.0;\n"
+    "    for (int i = 0; i < 5; i++) {\n"
+    "      vec2 at = v_uv + offs[i] * (B * 0.125) / size;\n"
+    "      vec3 a = textureLod(u_tex2, at - 0.5 * cand[k] / size, 0.0).rgb;\n"
+    "      vec3 b = textureLod(u_tex, at + 0.5 * cand[k] / size, 0.0).rgb;\n"
+    "      e += dot(abs(a - b), vec3(1.0 / 3.0));\n"
+    "    }\n"
+    "    e *= 0.2;\n"
+    "    if (e < best - 0.000001) { best = e; bm = cand[k]; }\n"
+    "  }\n"
+    "  vec3 a = textureLod(u_tex2, v_uv - 0.5 * bm / size, 0.0).rgb;\n"
+    "  vec3 b = textureLod(u_tex, v_uv + 0.5 * bm / size, 0.0).rgb;\n"
+    "  vec3 c = textureLod(u_tex, v_uv, 0.0).rgb;\n"
+    "  float off = max(best, 0.5 * dot(abs(a - b), vec3(1.0 / 3.0)));\n"
+    "  vec2 h = 0.5 * bm, hr = floor(h + 0.5), hf = h - hr;\n"
+    "  h = hr + sign(hf) * 2.0 * hf * hf;\n"
+    "  o = vec4(mix(cr(u_tex, v_uv + h / size), c, smoothstep(0.035, 0.11, off)), 1.0);\n"
+    "}\n";
+
+#include "hw/xbox/hle/vk/smaa.inc"
+
 static VkShaderModule module(HleShaderStage stage, const char *head, const char *body)
 {
     g_autofree char *src = g_strdup_printf("%s%s", head, body);
@@ -533,9 +929,9 @@ static VkShaderModule module(HleShaderStage stage, const char *head, const char 
     return m;
 }
 
-static VkPipeline pipeline(VkShaderModule fs, VkFormat fmt)
+static VkPipeline pipeline_l(VkShaderModule fs, VkFormat fmt, VkPipelineLayout layout)
 {
-    if (!g_ps.vs || !fs) {
+    if (!g_ps.vs || !fs || !layout) {
         return VK_NULL_HANDLE;
     }
     VkPipelineShaderStageCreateInfo st[2] = {
@@ -572,12 +968,17 @@ static VkPipeline pipeline(VkShaderModule fs, VkFormat fmt)
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &rci,
         .stageCount = 2, .pStages = st, .pVertexInputState = &vi, .pInputAssemblyState = &ia,
         .pViewportState = &vp, .pRasterizationState = &rs, .pMultisampleState = &ms,
-        .pColorBlendState = &cb, .pDynamicState = &ds, .layout = g_ps.pl };
+        .pColorBlendState = &cb, .pDynamicState = &ds, .layout = layout };
     VkPipeline p = VK_NULL_HANDLE;
     if (T.vkCreateGraphicsPipelines(g_hvk.dev, VK_NULL_HANDLE, 1, &gci, NULL, &p) != VK_SUCCESS) {
         p = VK_NULL_HANDLE;
     }
     return p;
+}
+
+static VkPipeline pipeline(VkShaderModule fs, VkFormat fmt)
+{
+    return pipeline_l(fs, fmt, g_ps.pl);
 }
 
 /* ---- setup ---- */
@@ -617,7 +1018,7 @@ static bool init(void)
     VkPipelineLayoutCreateInfo lci = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1,
         .pSetLayouts = &g_ps.dsl, .pushConstantRangeCount = 1, .pPushConstantRanges = &pcr };
-    VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, PS_FRAMES * PS_SETS },
+    VkDescriptorPoolSize ps[2] = { { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, PS_FRAMES * PS_SETS * 3 },
                                    { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, PS_FRAMES * PS_SETS } };
     VkDescriptorPoolCreateInfo pci = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = PS_FRAMES * PS_SETS,
@@ -649,9 +1050,12 @@ static bool init(void)
                                         .flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT,
                                         .queueFamilyIndex = g_hvk.qfam };
         VkSemaphoreCreateInfo si = { .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO };
-        VkDescriptorSetLayout l[PS_SETS] = { g_ps.dsl, g_ps.dsl, g_ps.dsl, g_ps.dsl };
+        VkDescriptorSetLayout l[SET_X0];
+        for (unsigned k = 0; k < SET_X0; k++) {
+            l[k] = g_ps.dsl;
+        }
         VkDescriptorSetAllocateInfo dai = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-                                            .descriptorPool = g_ps.dp, .descriptorSetCount = PS_SETS,
+                                            .descriptorPool = g_ps.dp, .descriptorSetCount = SET_X0,
                                             .pSetLayouts = l };
         if (T.vkCreateCommandPool(g_hvk.dev, &cpi, NULL, &f->pool) != VK_SUCCESS ||
             T.vkCreateSemaphore(g_hvk.dev, &si, NULL, &f->acquired) != VK_SUCCESS ||
@@ -667,17 +1071,26 @@ static bool init(void)
         f->ramp_stale = true;
     }
     g_ps.vs = module(HLE_SHADER_VERTEX, k_vs, "");
-    static const char *const body[P_COUNT] = { k_fs_bilinear, k_fs_area, k_fs_rcas, k_fs_crt, k_fs_osd,
-                                               k_fs_kdown, k_fs_kup, k_fs_fxaa, k_fs_easu };
-    for (unsigned i = 0; i < P_COUNT; i++) {
-        g_ps.fs[i] = module(HLE_SHADER_FRAGMENT, k_fs_head, body[i]);
+    static const char *const body[P_NIS + 1] = { k_fs_bilinear, k_fs_area, k_fs_rcas, k_fs_crt, k_fs_osd,
+                                               k_fs_kdown, k_fs_kup, k_fs_fxaa, k_fs_easu, NULL };
+    for (unsigned i = 0; i <= P_NIS; i++) {
+        if (i == P_NIS) {
+            /* its filter banks ahead of the shader (the head's functions first) */
+            g_autofree char *nis = g_strdup_printf("%s%s", k_nis_coef, k_fs_nis);
+            g_ps.fs[i] = module(HLE_SHADER_FRAGMENT, k_fs_head, nis);
+        } else {
+            g_ps.fs[i] = module(HLE_SHADER_FRAGMENT, k_fs_head, body[i]);
+        }
     }
     g_ps.pipe[P_FXAA] = pipeline(g_ps.fs[P_FXAA], VK_FORMAT_R8G8B8A8_UNORM);
     g_ps.pipe[P_EASU] = pipeline(g_ps.fs[P_EASU], VK_FORMAT_R8G8B8A8_UNORM);
-    hle_log("hakuX-hle-back", "present: ready (shaders: bilinear %d, averaging %d, FSR %d, FXAA %d)",
+    g_ps.pipe[P_NIS] = pipeline(g_ps.fs[P_NIS], VK_FORMAT_R8G8B8A8_UNORM);
+    g_ps.fs[P_SHARP] = module(HLE_SHADER_FRAGMENT, k_fs_head, k_fs_sharp);
+    g_ps.pipe[P_SHARP] = pipeline(g_ps.fs[P_SHARP], VK_FORMAT_R8G8B8A8_UNORM);
+    hle_log("hakuX-hle-back", "present: ready (shaders: bilinear %d, averaging %d, FSR %d, FXAA %d, NIS %d)",
             g_ps.fs[P_BILINEAR] != VK_NULL_HANDLE, g_ps.fs[P_AREA] != VK_NULL_HANDLE,
             g_ps.fs[P_RCAS] != VK_NULL_HANDLE && g_ps.pipe[P_EASU] != VK_NULL_HANDLE,
-            g_ps.pipe[P_FXAA] != VK_NULL_HANDLE);
+            g_ps.pipe[P_FXAA] != VK_NULL_HANDLE, g_ps.pipe[P_NIS] != VK_NULL_HANDLE);
     return g_ps.fs[P_BILINEAR] != VK_NULL_HANDLE;
 }
 
@@ -946,6 +1359,11 @@ void hle_present_set_vsync(bool on)
     }
 }
 
+void hle_present_set_refresh(float hz)
+{
+    g_ps.refresh_ns = hz > 20.0f && hz < 1000.0f ? (int64_t)(1e9f / hz) : 0;
+}
+
 void hle_present_set_crt(int kind)
 {
     g_crt = kind < 0 ? 0 : kind > 3 ? 3 : kind;
@@ -1046,7 +1464,9 @@ bool hle_present_unchanged(struct ANativeWindow *win, uint64_t key)
         have_sc = g_rm.sh->src[g_rm.slot].vsync == (g_vsync ? 1u : 0u);
     }
 #endif
-    if (ov_on() || g_ov_shown || g_ps.shot_want || !g_ps.shown || !win || win != g_ps.win || g_ps.stale || !have_sc ||
+    /* an in-between frame is shown once, then nothing until the frame's own time (hle_present_due_ns) */
+    const bool il_wait = g_ps.il_pending && (!g_ps.il_shown || hle_now_ns() >= g_ps.il_due);
+    if (ov_on() || g_ov_shown || g_ps.shot_want || il_wait || !g_ps.shown || !win || win != g_ps.win || g_ps.stale || !have_sc ||
         key != g_ps.shown_key || ww != g_ps.wsize.width || wh != g_ps.wsize.height ||
         hle_disp_gamma_seq() != g_ps.ramp_gen) {
         return false;
@@ -1057,6 +1477,11 @@ bool hle_present_unchanged(struct ANativeWindow *win, uint64_t key)
         return false;
     }
     return !front || (gen == g_ps.f.gen && swap_id == g_ps.f.swap_id);
+}
+
+int64_t hle_present_due_ns(void)
+{
+    return g_ps.il_pending && g_ps.il_shown ? g_ps.il_due : 0;
 }
 
 /* ---- the frame's pictures (vk/share.h): a ring of shared images instead
@@ -1312,7 +1737,7 @@ static bool remote_make(uint32_t w, uint32_t h)
             .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .pNext = &xi, .imageType = VK_IMAGE_TYPE_2D,
             .format = fmt, .extent = { w, h, 1 }, .mipLevels = 1, .arrayLayers = 1,
             .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
-            .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+            .usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
             .sharingMode = VK_SHARING_MODE_EXCLUSIVE, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
         VkResult r = T.vkCreateImage(g_hvk.dev, &ici, NULL, &g_rm.img[i]);
         if (r != VK_SUCCESS) {
@@ -1632,7 +2057,8 @@ static bool img_target(PsImg *t, uint32_t w, uint32_t h, VkFormat fmt, const cha
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D,
         .format = fmt, .extent = { w, h, 1 }, .mipLevels = 1, .arrayLayers = 1,
         .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
-        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                 VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED };
     if (T.vkCreateImage(g_hvk.dev, &ici, NULL, &t->img) != VK_SUCCESS) {
         t->img = VK_NULL_HANDLE;
@@ -1680,6 +2106,7 @@ static void barrier(VkCommandBuffer cb, VkImage img, VkImageLayout from, VkImage
 /* the sampler set_src gives: the picture's pass upscaling as nearest
  * neighbour (#183, the pixels kept square and sharp), else linear */
 static bool g_smp_near;
+static VkPipelineLayout g_pl_cur;   /* the layout of the extra-sampler passes while one is drawn */
 
 /* Set ds to sample src (and the frame's share of the ramp). */
 static void set_src(PsFrame *f, VkDescriptorSet ds, VkImageView src)
@@ -1704,8 +2131,9 @@ static void quad_ds(VkCommandBuffer cb, PsFrame *f, VkDescriptorSet ds, VkPipeli
     T.vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, p);
     T.vkCmdSetViewport(cb, 0, 1, &vp);
     T.vkCmdSetScissor(cb, 0, 1, &sc);
-    T.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, g_ps.pl, 0, 1, &ds, 0, NULL);
-    T.vkCmdPushConstants(cb, g_ps.pl, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48, pc);
+    const VkPipelineLayout pl = g_pl_cur ? g_pl_cur : g_ps.pl;
+    T.vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pl, 0, 1, &ds, 0, NULL);
+    T.vkCmdPushConstants(cb, pl, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48, pc);
     T.vkCmdDraw(cb, 4, 1, 0, 0);
 }
 
@@ -1774,23 +2202,181 @@ static void img_pass(VkCommandBuffer cb, PsFrame *f, unsigned set, PsImg *t, VkP
     img_pass_ds(cb, f, f->set[set], t, p, src, extra);
 }
 
+/* ---- SMAA and frame interpolation: set-up at first use, so that without them nothing of this runs ---- */
+
+/* Set ds's binding to sample v. */
+static void set_extra(VkDescriptorSet ds, uint32_t binding, VkImageView v)
+{
+    VkDescriptorImageInfo ii = { g_ps.smp, v, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    VkWriteDescriptorSet wr = { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = ds, .dstBinding = binding,
+                                .descriptorCount = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                .pImageInfo = &ii };
+    T.vkUpdateDescriptorSets(g_hvk.dev, 1, &wr, 0, NULL);
+}
+
+/* A pass of pipeline p (of the extra-sampler layout) over all of t, sampling v0 (u_tex), v2 (u_tex2), v3 (u_tex3). */
+static void x_pass(VkCommandBuffer cb, PsFrame *f, unsigned set, PsImg *t, VkPipeline p, VkImageView v0,
+                   VkImageView v2, VkImageView v3, const float extra[4])
+{
+    if (v2) {
+        set_extra(f->set[set], 2, v2);
+    }
+    if (v3) {
+        set_extra(f->set[set], 3, v3);
+    }
+    g_pl_cur = g_ps.plx;
+    img_pass_ds(cb, f, f->set[set], t, p, v0, extra);
+    g_pl_cur = VK_NULL_HANDLE;
+}
+
+/* The layout with the extra samplers, and each frame's sets of it. */
+static bool x_init(void)
+{
+    if (g_ps.x_state) {
+        return g_ps.x_state == 1;
+    }
+    g_ps.x_state = 2;
+    VkDescriptorSetLayoutBinding b[4] = {
+        { 0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL },
+        { 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL },
+        { 2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL },
+        { 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, NULL } };
+    VkDescriptorSetLayoutCreateInfo dci = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 4, .pBindings = b };
+    VkPushConstantRange pcr = { VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 48 };
+    if (T.vkCreateDescriptorSetLayout(g_hvk.dev, &dci, NULL, &g_ps.dslx) != VK_SUCCESS) {
+        g_ps.dslx = VK_NULL_HANDLE;
+        return false;
+    }
+    VkPipelineLayoutCreateInfo lci = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1,
+        .pSetLayouts = &g_ps.dslx, .pushConstantRangeCount = 1, .pPushConstantRanges = &pcr };
+    if (T.vkCreatePipelineLayout(g_hvk.dev, &lci, NULL, &g_ps.plx) != VK_SUCCESS) {
+        g_ps.plx = VK_NULL_HANDLE;
+        return false;
+    }
+    for (unsigned i = 0; i < PS_FRAMES; i++) {
+        VkDescriptorSetLayout l[PS_SETS - SET_X0];
+        for (unsigned k = 0; k < PS_SETS - SET_X0; k++) {
+            l[k] = g_ps.dslx;
+        }
+        VkDescriptorSetAllocateInfo dai = { .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+                                            .descriptorPool = g_ps.dp, .descriptorSetCount = PS_SETS - SET_X0,
+                                            .pSetLayouts = l };
+        if (T.vkAllocateDescriptorSets(g_hvk.dev, &dai, g_ps.fr[i].set + SET_X0) != VK_SUCCESS) {
+            return false;
+        }
+    }
+    g_ps.x_state = 1;
+    return true;
+}
+
+/* SMAA's three passes' pipelines (shaders compiled now), once. */
+static bool sm_ready(void)
+{
+    if (!g_ps.sm_tried) {
+        g_ps.sm_tried = true;
+        if (x_init()) {
+            g_autofree char *b0 = g_strdup_printf("%s%s%s", k_smaa_pre, k_smaa_lib, k_fs_sm_edge);
+            g_autofree char *b1 = g_strdup_printf("%s%s%s%s", k_fs_x, k_smaa_pre, k_smaa_lib, k_fs_sm_wt);
+            g_autofree char *b2 = g_strdup_printf("%s%s%s%s", k_fs_x, k_smaa_pre, k_smaa_lib, k_fs_sm_blend);
+            g_ps.fs[P_SM_EDGE] = module(HLE_SHADER_FRAGMENT, k_fs_head, b0);
+            g_ps.fs[P_SM_WT] = module(HLE_SHADER_FRAGMENT, k_fs_head, b1);
+            g_ps.fs[P_SM_BLEND] = module(HLE_SHADER_FRAGMENT, k_fs_head, b2);
+            g_ps.pipe[P_SM_EDGE] = pipeline(g_ps.fs[P_SM_EDGE], VK_FORMAT_R8G8B8A8_UNORM);
+            g_ps.pipe[P_SM_WT] = pipeline_l(g_ps.fs[P_SM_WT], VK_FORMAT_R8G8B8A8_UNORM, g_ps.plx);
+            g_ps.pipe[P_SM_BLEND] = pipeline_l(g_ps.fs[P_SM_BLEND], VK_FORMAT_R8G8B8A8_UNORM, g_ps.plx);
+        }
+        hle_log("hakuX-hle-back", "present: SMAA %s", g_ps.pipe[P_SM_BLEND] && g_ps.pipe[P_SM_WT] &&
+                g_ps.pipe[P_SM_EDGE] ? "ready" : "unavailable (shaders or layout failed): FXAA instead");
+    }
+    return g_ps.pipe[P_SM_EDGE] && g_ps.pipe[P_SM_WT] && g_ps.pipe[P_SM_BLEND];
+}
+
+/* The interpolation's three pipelines, once. */
+static bool il_ready(void)
+{
+    if (!g_ps.il_tried) {
+        g_ps.il_tried = true;
+        if (x_init()) {
+            g_autofree char *b0 = g_strdup_printf("%s%s", k_fs_x, k_fs_ilme);
+            g_autofree char *b1 = g_strdup_printf("%s%s", k_fs_x, k_fs_ilmix);
+            g_ps.fs[P_IL_ME] = module(HLE_SHADER_FRAGMENT, k_fs_head, b0);
+            g_ps.fs[P_IL_MIX] = module(HLE_SHADER_FRAGMENT, k_fs_head, b1);
+            g_ps.fs[P_COPY] = module(HLE_SHADER_FRAGMENT, k_fs_head, k_fs_copy);
+            g_autofree char *b2 = g_strdup_printf("%s%s", k_fs_x, k_fs_illv);
+            g_ps.fs[P_IL_DOWN] = module(HLE_SHADER_FRAGMENT, k_fs_head, k_fs_ildown);
+            g_ps.fs[P_IL_LV] = module(HLE_SHADER_FRAGMENT, k_fs_head, b2);
+            /* the motion images hold pixels' shifts as they are (16-bit floats: a format every device renders to) */
+            g_ps.pipe[P_IL_DOWN] = pipeline_l(g_ps.fs[P_IL_DOWN], VK_FORMAT_R8G8B8A8_UNORM, g_ps.plx);
+            g_ps.pipe[P_IL_HALF] = pipeline_l(g_ps.fs[P_COPY], VK_FORMAT_R8G8B8A8_UNORM, g_ps.plx);
+            g_ps.pipe[P_IL_LV] = pipeline_l(g_ps.fs[P_IL_LV], VK_FORMAT_R16G16B16A16_SFLOAT, g_ps.plx);
+            g_ps.pipe[P_IL_ME] = pipeline_l(g_ps.fs[P_IL_ME], VK_FORMAT_R16G16B16A16_SFLOAT, g_ps.plx);
+            g_ps.pipe[P_IL_MIX] = pipeline_l(g_ps.fs[P_IL_MIX], VK_FORMAT_R8G8B8A8_UNORM, g_ps.plx);
+            g_ps.pipe[P_COPY] = pipeline(g_ps.fs[P_COPY], VK_FORMAT_R8G8B8A8_UNORM);
+        }
+        hle_log("hakuX-hle-back", "present: frame interpolation %s", g_ps.pipe[P_IL_ME] && g_ps.pipe[P_IL_MIX] &&
+                g_ps.pipe[P_COPY] && g_ps.pipe[P_IL_DOWN] && g_ps.pipe[P_IL_HALF] && g_ps.pipe[P_IL_LV] ?
+                "ready" : "unavailable (shaders or layout failed)");
+    }
+    return g_ps.pipe[P_IL_ME] && g_ps.pipe[P_IL_MIX] && g_ps.pipe[P_COPY] && g_ps.pipe[P_IL_DOWN] &&
+           g_ps.pipe[P_IL_HALF] && g_ps.pipe[P_IL_LV];
+}
+
+static bool host_buf(VkBuffer *b, VkDeviceMemory *m, uint8_t **map, VkDeviceSize *have, VkDeviceSize need,
+                     VkBufferUsageFlags use);
+
+/* SMAA's two tables into their images (recorded into cb once, after which they sit sampled). */
+static bool sm_tables(VkCommandBuffer cb)
+{
+    if (g_ps.sm_loaded) {
+        return true;
+    }
+    const VkDeviceSize na = sizeof(k_smaa_area), ns = sizeof(k_smaa_search);
+    if (!img_target(&g_ps.sm_area, 160, 560, VK_FORMAT_R8G8_UNORM, "SMAA") ||
+        !img_target(&g_ps.sm_search, 64, 16, VK_FORMAT_R8_UNORM, "SMAA") ||
+        !host_buf(&g_ps.sm_stage, &g_ps.sm_stage_mem, &g_ps.sm_stage_map, &g_ps.sm_stage_size, na + ns,
+                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT)) {
+        return false;
+    }
+    memcpy(g_ps.sm_stage_map, k_smaa_area, na);
+    memcpy(g_ps.sm_stage_map + na, k_smaa_search, ns);
+    PsImg *im[2] = { &g_ps.sm_area, &g_ps.sm_search };
+    for (unsigned i = 0; i < 2; i++) {
+        barrier(cb, im[i]->img, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_2_COPY_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT);
+        VkBufferImageCopy r = { .bufferOffset = i ? na : 0,
+                                .imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 },
+                                .imageExtent = { im[i]->w, im[i]->h, 1 } };
+        T.vkCmdCopyBufferToImage(cb, g_ps.sm_stage, im[i]->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
+        barrier(cb, im[i]->img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                VK_PIPELINE_STAGE_2_COPY_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT);
+    }
+    g_ps.sm_loaded = true;
+    return true;
+}
+
 /* How the frame meets the window, logged when that changes. */
-static void log_path(unsigned p, bool fxaa, uint32_t vw, uint32_t vh)
+static void log_path(unsigned p, unsigned fxaa, uint32_t vw, uint32_t vh, bool nis)
 {
     static unsigned s_p = ~0u;
-    static bool s_fxaa;
+    static unsigned s_fxaa;
+    static bool s_nis;
     static uint32_t s_w, s_h, s_vw, s_vh;
-    if (p == s_p && fxaa == s_fxaa && g_ps.f.w == s_w && g_ps.f.h == s_h && vw == s_vw && vh == s_vh) {
+    if (p == s_p && fxaa == s_fxaa && nis == s_nis && g_ps.f.w == s_w && g_ps.f.h == s_h && vw == s_vw && vh == s_vh) {
         return;
     }
     s_p = p;
     s_fxaa = fxaa;
+    s_nis = nis;
     s_w = g_ps.f.w;
     s_h = g_ps.f.h;
     s_vw = vw;
     s_vh = vh;
-    hle_log("hakuX-hle-back", "present: %ux%u%s into %ux%u: %s", s_w, s_h, fxaa ? " after FXAA" : "", vw, vh,
-            p == P_AREA ? "averaged down" : p == P_RCAS ? "scaled up by FSR" : "bilinear");
+    hle_log("hakuX-hle-back", "present: %ux%u%s into %ux%u: %s", s_w, s_h, fxaa == 2 ? " after SMAA" : fxaa ? " after FXAA" : "", vw, vh,
+            p == P_AREA ? "averaged down" : p == P_RCAS ? (nis ? "scaled up by NIS" : "scaled up by FSR") : "bilinear");
 }
 
 /* ---- the overlay (swapchain.h) ----
@@ -2531,6 +3117,11 @@ static void remote_end(VkCommandBuffer cb, PsFrame *f, VkImage dst, bool shot, u
 
 void hle_present_end(float sx, float sy, bool fxaa, int upscale, bool average, uint64_t key)
 {
+    const int nis_sharp = (upscale >> 8) & 0xFF;     /* NIS's sharpness (percent) rides above the kind */
+    const bool smaa = (upscale >> 16) & 1;          /* SMAA in place of FXAA */
+    const bool interp = (upscale >> 17) & 1;        /* an in-between frame for a slow game */
+    const unsigned sharpen = (upscale >> 19) & 3;   /* sharpening without an upscaler: 0 off, 1 to 3 */
+    upscale &= 0xFF;
     g_ps.shown = false;
     PsFrame *f = &g_ps.fr[g_ps.cur];
     const uint32_t ww = g_ps.wsize.width, wh = g_ps.wsize.height, iw = g_ps.ext.width, ih = g_ps.ext.height;
@@ -2556,7 +3147,7 @@ void hle_present_end(float sx, float sy, bool fxaa, int upscale, bool average, u
                                     .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT };
     T.vkBeginCommandBuffer(cb, &bi);
     VkImageView src = g_ps.have ? g_ps.f.view : VK_NULL_HANDLE;
-    bool fxaa_done = false;
+    unsigned aa_done = 0;               /* 0 none, 1 FXAA, 2 SMAA: what src is made by */
     /* The frame's writes need no barrier here: each writer of a display
      * image (the swap's blit, the gamma pass, the overlay) ends with one
      * into SHADER_READ_ONLY over all later commands of the queue, ours too
@@ -2564,36 +3155,171 @@ void hle_present_end(float sx, float sy, bool fxaa, int upscale, bool average, u
      * presented). A barrier of our own drained the GPU at every refresh; a
      * wait on the render timeline at the frame's value sent the submit down
      * a slow path on Qualcomm's driver (Halo 2 at 30 fps, Adreno 830). */
-    if (g_ps.have && fxaa && g_ps.pipe[P_FXAA]) {
+    if (g_ps.have && smaa && sm_ready()) {
+        const uint32_t fw = g_ps.f.w, fh = g_ps.f.h;
+        if (sm_tables(cb) && img_target(&g_ps.fx, fw, fh, VK_FORMAT_R8G8B8A8_UNORM, "SMAA") &&
+            img_target(&g_ps.sm_edge, fw, fh, VK_FORMAT_R8G8B8A8_UNORM, "SMAA") &&
+            img_target(&g_ps.sm_wt, fw, fh, VK_FORMAT_R8G8B8A8_UNORM, "SMAA")) {
+            if (g_ps.fx.serial != g_ps.serial || g_ps.fx.kind != 2) {
+                static const float none[4];
+                img_pass(cb, f, SET_FXAA, &g_ps.sm_edge, g_ps.pipe[P_SM_EDGE], g_ps.f.view, none);
+                x_pass(cb, f, SET_X0, &g_ps.sm_wt, g_ps.pipe[P_SM_WT], g_ps.sm_edge.view, g_ps.sm_area.view,
+                       g_ps.sm_search.view, none);
+                x_pass(cb, f, SET_X1, &g_ps.fx, g_ps.pipe[P_SM_BLEND], g_ps.f.view, g_ps.sm_wt.view,
+                       VK_NULL_HANDLE, none);
+                g_ps.fx.serial = g_ps.serial;
+                g_ps.fx.kind = 2;
+            }
+            src = g_ps.fx.view;
+            aa_done = 2;
+        } else {
+            g_ps.pipe[P_SM_EDGE] = VK_NULL_HANDLE;      /* no image or table for it: SMAA off (FXAA, if asked) */
+        }
+    }
+    if (!aa_done && g_ps.have && fxaa && g_ps.pipe[P_FXAA]) {
         if (img_target(&g_ps.fx, g_ps.f.w, g_ps.f.h, VK_FORMAT_R8G8B8A8_UNORM, "FXAA")) {
-            if (g_ps.fx.serial != g_ps.serial) {
+            if (g_ps.fx.serial != g_ps.serial || g_ps.fx.kind != 1) {
                 static const float none[4];
                 img_pass(cb, f, SET_FXAA, &g_ps.fx, g_ps.pipe[P_FXAA], g_ps.f.view, none);
                 g_ps.fx.serial = g_ps.serial;
+                g_ps.fx.kind = 1;
             }
             src = g_ps.fx.view;
-            fxaa_done = true;
+            aa_done = 1;
         } else {
             g_ps.pipe[P_FXAA] = VK_NULL_HANDLE;     /* no image for it: FXAA off */
         }
     }
+    /* Frame interpolation. A game slower than the refresh (30 fps on 60 Hz) gets a frame between each two: when
+     * a new frame comes, the in-between of the one before and it is shown, and half a frame's time later the
+     * frame itself (so it is late by that: the one price). Only for frames 24 to 100 ms apart, and not under the
+     * overlay's cover. `content` tells the frame shown from its in-between (the caches below). */
+    bool il_mid = false;
+    const bool cover_pre = g_ov.on && (g_ov.flags & HLE_OV_COVER);
+    if (!(g_ps.have && interp && !cover_pre && il_ready())) {
+        g_ps.il_pv.serial = 0;          /* what it holds isn't the frame before the next one */
+        g_ps.il_pending = false;
+    } else {
+        const uint32_t fw = g_ps.f.w, fh = g_ps.f.h;
+        const unsigned sc = (unsigned)MAX(hle_host_render_scale(), 1), blk = 8 * sc, stp = 2 * sc;
+        const uint32_t bw = (fw + blk - 1) / blk, bh = (fh + blk - 1) / blk;
+        const uint32_t l1w = MAX(fw / (2 * sc), 1u), l1h = MAX(fh / (2 * sc), 1u);
+        const uint32_t l2w = MAX(l1w / 2, 1u), l2h = MAX(l1h / 2, 1u);
+        const VkFormat c8 = VK_FORMAT_R8G8B8A8_UNORM, mvf = VK_FORMAT_R16G16B16A16_SFLOAT;
+        if (!img_target(&g_ps.il_pv, fw, fh, c8, "interpolation") ||
+            !img_target(&g_ps.il_mid, fw, fh, c8, "interpolation") ||
+            !img_target(&g_ps.il_l1[0], l1w, l1h, c8, "interpolation") ||
+            !img_target(&g_ps.il_l1[1], l1w, l1h, c8, "interpolation") ||
+            !img_target(&g_ps.il_l2[0], l2w, l2h, c8, "interpolation") ||
+            !img_target(&g_ps.il_l2[1], l2w, l2h, c8, "interpolation") ||
+            !img_target(&g_ps.il_mva, bw, bh, mvf, "interpolation") ||
+            !img_target(&g_ps.il_mvb, bw, bh, mvf, "interpolation") ||
+            !img_target(&g_ps.il_mv, bw, bh, mvf, "interpolation")) {
+            g_ps.pipe[P_IL_ME] = VK_NULL_HANDLE;        /* no image for it: no interpolation */
+            g_ps.il_pending = false;
+        } else {
+            if (g_ps.serial != g_ps.il_serial) {
+                const int64_t now = hle_now_ns(), dt = now - g_ps.il_t_new;
+                static const float none[4];
+                /* for games slower than the display: a frame 1.6 refreshes or more after the last (30 fps on
+                 * 60 Hz, 60 fps on 120 Hz and up), 24 ms at most to count (as before on 60 Hz) and 12 at least */
+                const int64_t period = g_ps.refresh_ns ? g_ps.refresh_ns : 16666667ll;
+                const int64_t slow = MAX(MIN(24000000ll, period * 8 / 5), 12000000ll);
+                const int64_t early = MIN(3000000ll, period * 3 / 10);
+                g_ps.il_t_new = now;
+                g_ps.il_serial = g_ps.serial;
+                g_ps.il_pending = false;
+                /* the frame at a half and a quarter of the console's size (kept: the next frame's "before") */
+                const unsigned k = g_ps.il_k ^= 1u;
+                const float d1[4] = { (float)(2 * sc), 0.0f, 0.0f, 0.0f };
+                /* (these two read one picture; the sets' other samplers are given it too, to hold something) */
+                x_pass(cb, f, SET_X4, &g_ps.il_l1[k], g_ps.pipe[P_IL_DOWN], src, src, src, d1);
+                x_pass(cb, f, SET_X5, &g_ps.il_l2[k], g_ps.pipe[P_IL_HALF], g_ps.il_l1[k].view, g_ps.il_l1[k].view,
+                       g_ps.il_l1[k].view, none);
+                if (g_ps.il_pv.serial && dt >= slow && dt <= 100000000ll) {
+                    const float la[4] = { (float)blk, (float)(4 * sc), 10.0f, 0.0f };
+                    const float lb[4] = { (float)blk, (float)(2 * sc), 2.0f, 1.0f };
+                    const float me[4] = { (float)blk, (float)stp, 0.0f, 0.0f };
+                    const float mix[4] = { 0.0f, (float)blk, 0.0f, 0.0f };
+                    /* the quarter-size level has no level above: its third sampler is bound, not read */
+                    x_pass(cb, f, SET_X6, &g_ps.il_mva, g_ps.pipe[P_IL_LV], g_ps.il_l2[k].view, g_ps.il_l2[k ^ 1u].view,
+                           g_ps.il_l2[k ^ 1u].view, la);
+                    x_pass(cb, f, SET_X7, &g_ps.il_mvb, g_ps.pipe[P_IL_LV], g_ps.il_l1[k].view, g_ps.il_l1[k ^ 1u].view,
+                           g_ps.il_mva.view, lb);
+                    x_pass(cb, f, SET_X2, &g_ps.il_mv, g_ps.pipe[P_IL_ME], src, g_ps.il_pv.view, g_ps.il_mvb.view, me);
+                    x_pass(cb, f, SET_X3, &g_ps.il_mid, g_ps.pipe[P_IL_MIX], src, g_ps.il_pv.view, g_ps.il_mv.view,
+                           mix);
+                    g_ps.il_mid.serial = g_ps.serial;
+                    g_ps.il_pending = true;
+                    g_ps.il_shown = false;
+                    g_ps.il_due = now + dt / 2 - early;
+                    if (!g_ps.il_logged) {
+                        g_ps.il_logged = true;
+                        hle_log("hakuX-hle-back", "present: frame interpolation on (frames %.1f ms apart, a refresh "
+                                "%.1f ms, blocks of %u px, motion up to %u px a frame)", dt / 1e6, period / 1e6, blk,
+                                46 * sc);
+                    }
+                }
+                img_pass(cb, f, SET_COPY, &g_ps.il_pv, g_ps.pipe[P_COPY], src, none);   /* for the next */
+                g_ps.il_pv.serial = 1;
+            }
+            if (g_ps.il_pending) {
+                if (hle_now_ns() >= g_ps.il_due || g_ps.il_mid.serial != g_ps.serial) {
+                    g_ps.il_pending = false;
+                } else {
+                    src = g_ps.il_mid.view;
+                    il_mid = true;
+                }
+            }
+        }
+    }
+    const uint64_t content = g_ps.serial * 2 + (il_mid ? 1 : 0);
     /* the frame's pixels per window pixel: over 1 (either axis) averaged
      * down, under 1 scaled up as chosen; FSR's EASU into its image first
      * (a new frame, or a new size), its RCAS on the way into the window */
     const float vw = sx * (float)ww, vh = sy * (float)wh;
     const float rx = g_ps.have ? (float)g_ps.f.w / vw : 1.0f, ry = g_ps.have ? (float)g_ps.f.h / vh : 1.0f;
     const bool down = (rx > 1.01f || ry > 1.01f) && average && g_ps.pipe[P_AREA];
-    bool fsr = g_ps.have && !down && !g_crt && (rx < 0.99f || ry < 0.99f) && upscale == HLE_UPSCALE_FSR &&
-               g_ps.pipe[P_EASU] && g_ps.pipe[P_RCAS];
-    if (fsr && !img_target(&g_ps.up, (uint32_t)(vw + 0.5f), (uint32_t)(vh + 0.5f), VK_FORMAT_R8G8B8A8_UNORM, "FSR")) {
-        g_ps.pipe[P_EASU] = VK_NULL_HANDLE;         /* no image for it: bilinear */
-        fsr = false;
+    /* NIS scales 1x to 2x (the SDK's range) with its own sharpening; beyond that, or without its
+     * pass, FSR scales instead */
+    const bool nis_range = rx >= 0.499f && ry >= 0.499f && rx <= 1.0f && ry <= 1.0f;
+    bool nis = g_ps.have && !down && !g_crt && (rx < 0.99f || ry < 0.99f) && upscale == HLE_UPSCALE_NIS &&
+               nis_range && g_ps.pipe[P_NIS] && g_ps.pipe[P_RCAS];
+    bool fsr = g_ps.have && !down && !g_crt && !nis && (rx < 0.99f || ry < 0.99f) &&
+               (upscale == HLE_UPSCALE_FSR || upscale == HLE_UPSCALE_NIS) && g_ps.pipe[P_EASU] && g_ps.pipe[P_RCAS];
+    if ((fsr || nis) && !img_target(&g_ps.up, (uint32_t)(vw + 0.5f), (uint32_t)(vh + 0.5f), VK_FORMAT_R8G8B8A8_UNORM,
+                                    nis ? "NIS" : "FSR")) {
+        g_ps.pipe[P_EASU] = g_ps.pipe[P_NIS] = VK_NULL_HANDLE;   /* no image for it: bilinear */
+        fsr = nis = false;
     }
-    if (fsr && (g_ps.up.serial != g_ps.serial || g_ps.up.fxaa != fxaa_done)) {
-        const float extra[4] = { (float)g_ps.f.w, (float)g_ps.f.h, (float)g_ps.up.w, (float)g_ps.up.h };
-        img_pass(cb, f, SET_EASU, &g_ps.up, g_ps.pipe[P_EASU], src, extra);
-        g_ps.up.serial = g_ps.serial;
-        g_ps.up.fxaa = fxaa_done;
+    /* Sharpening when no upscaler does it (FSR and NIS sharpen their own; a CRT filter has its look): the frame
+     * (anti-aliased, or the in-between one) sharpened at its own size, then placed as it would have been. */
+    if (g_ps.have && sharpen && !fsr && !nis && !g_crt && g_ps.pipe[P_SHARP]) {
+        if (img_target(&g_ps.sh, g_ps.f.w, g_ps.f.h, VK_FORMAT_R8G8B8A8_UNORM, "sharpening")) {
+            if (g_ps.sh.serial != content + 1 || g_ps.sh.fxaa != aa_done || g_ps.sh.kind != sharpen) {
+                /* 2^-stops, as RCAS: 2, 1 and 0 stops */
+                const float k[4] = { sharpen == 1 ? 0.25f : sharpen == 2 ? 0.5f : 1.0f, 0.0f, 0.0f, 0.0f };
+                img_pass(cb, f, SET_SHARP, &g_ps.sh, g_ps.pipe[P_SHARP], src, k);
+                g_ps.sh.serial = content + 1;       /* + 1: 0 is "nothing" */
+                g_ps.sh.fxaa = aa_done;
+                g_ps.sh.kind = sharpen;
+            }
+            src = g_ps.sh.view;
+        } else {
+            g_ps.pipe[P_SHARP] = VK_NULL_HANDLE;    /* no image for it: off */
+        }
+    }
+    const unsigned up_kind = nis ? 1u + (unsigned)(nis_sharp > 100 ? 100 : nis_sharp) : 0u;
+    if ((fsr || nis) && (g_ps.up.serial != content || g_ps.up.fxaa != aa_done || g_ps.up.kind != up_kind)) {
+        float extra[4] = { (float)g_ps.f.w, (float)g_ps.f.h, (float)g_ps.up.w, (float)g_ps.up.h };
+        if (nis) {
+            /* the width carries the sharpness in its fraction (percent / 128: exact in a float) */
+            extra[2] += (float)(nis_sharp > 100 ? 100 : nis_sharp) / 128.0f;
+        }
+        img_pass(cb, f, SET_EASU, &g_ps.up, g_ps.pipe[nis ? P_NIS : P_EASU], src, extra);
+        g_ps.up.serial = content;
+        g_ps.up.fxaa = aa_done;
+        g_ps.up.kind = up_kind;
     }
     /* the picture's pass: p over the frame's place, from `from` */
     unsigned p = P_BILINEAR;
@@ -2603,9 +3329,10 @@ void hle_present_end(float sx, float sy, bool fxaa, int upscale, bool average, u
         p = P_AREA;
         pc[4] = rx;
         pc[5] = ry;
-    } else if (fsr) {
+    } else if (fsr || nis) {
         p = P_RCAS;
-        pc[4] = 0.8705506f;                 /* sharpness 0.2 stops: 2^-0.2 (FsrRcasCon, AMD's sample's) */
+        pc[4] = nis ? 0.0f                  /* NIS sharpened already: RCAS at 0 hands the pixel on (the gamma ramp's) */
+                    : 0.8705506f;           /* sharpness 0.2 stops: 2^-0.2 (FsrRcasCon, AMD's sample's) */
         from = g_ps.up.view;
     }
     if (g_crt && g_ps.pipe[P_CRT]) {
@@ -2658,7 +3385,7 @@ void hle_present_end(float sx, float sy, bool fxaa, int upscale, bool average, u
                              g_ps.rot[0], g_ps.rot[1], g_ps.rot[2], g_ps.rot[3] };
             quad(cb, f, SET_OSD, g_ps.pipe[P_OSD], src, oc, iw, ih);
         }
-        log_path(p, fxaa_done, (uint32_t)(vw + 0.5f), (uint32_t)(vh + 0.5f));
+        log_path(p, aa_done, (uint32_t)(vw + 0.5f), (uint32_t)(vh + 0.5f), nis);
     }
     if (ov) {
         ov_draw(cb, f, iw, ih, scene_ok);
@@ -2667,6 +3394,7 @@ void hle_present_end(float sx, float sy, bool fxaa, int upscale, bool average, u
     const bool shot = g_ps.shot_want && g_ps.shot_can && shot_buf((VkDeviceSize)iw * ih * 4);
 #ifdef _WIN32
     if (g_rm.on) {
+        g_ps.il_shown = il_mid;     /* (remote_end: the picture is the frame's from here) */
         remote_end(cb, f, dst, shot, iw, ih, key);
         return;
     }
@@ -2751,6 +3479,7 @@ void hle_present_end(float sx, float sy, bool fxaa, int upscale, bool average, u
     if (pr == VK_SUCCESS || pr == VK_SUBOPTIMAL_KHR) {
         g_ps.shown = true;
         g_ps.shown_key = key;
+        g_ps.il_shown = il_mid;
         g_ov.presented++;
     }
     if (pr == VK_ERROR_OUT_OF_DATE_KHR || (pr == VK_SUBOPTIMAL_KHR && g_ps.follows)) {

@@ -187,6 +187,42 @@ int hle_host_anisotropy(void)
     return g_anisotropy;
 }
 
+static int g_texpack = 8;       /* bit 3 (the upscaler beside the game, with bit 2) on unless texlive=0 */
+
+void nc_hle_set_texpack(int bits, bool on)
+{
+    g_texpack = on ? g_texpack | bits : g_texpack & ~bits;
+}
+
+int hle_host_texpack(void)
+{
+    return g_texpack;
+}
+
+static int g_texpack_cap;
+
+void nc_hle_set_texpack_cap(int px)
+{
+    g_texpack_cap = px < 0 ? 0 : px;
+}
+
+int hle_host_texpack_cap(void)
+{
+    return g_texpack_cap;
+}
+
+static int g_mvstat;
+
+void nc_hle_set_mvstat(int on)
+{
+    g_mvstat = on;
+}
+
+int hle_host_mvstat(void)
+{
+    return g_mvstat;
+}
+
 /* A custom Vulkan driver's entry point (the app loads Turnip through
  * adrenotools), or the system driver's. */
 static PFN_vkGetInstanceProcAddr g_custom_gipa;

@@ -108,9 +108,31 @@ xbased doesn't include any copyrighted Xbox software.
 
 ### Picture
 - **Internal resolution** up to 8x, aspect ratio, widescreen and video modes.
-- **FXAA** and **anisotropic filtering** up to 16x.
-- **Upscaling**: bilinear or AMD FSR 1.
+- **FXAA**, **SMAA** (a sharper anti-aliasing for the higher render scales; MIT, see `licenses/smaa.license.txt`) and **anisotropic filtering** up to 16x.
+- **Frame interpolation** (Settings > Video, off): for a game slower than the display (30 fps on 60 Hz, 60 fps on
+  120 Hz and up), a frame between each two, from the motion between them. It delays the picture by half a frame.
+- **Upscaling**: bilinear, nearest, AMD FSR 1 or NVIDIA Image Scaling (NIS, with a sharpness setting; MIT, see `licenses/nvidia-nis.license.txt`).
+- **Sharpening** (Settings > Video, off): low, medium or high, for a picture no upscaler sharpens (Bilinear or
+  Nearest; FSR and NIS have their own).
+- **Integer scaling** (Settings > Video, off): the picture a whole number of times the console's lines tall, with
+  borders; with the Nearest upscaler every pixel is a clean square.
+- **Texture packs** (Settings > Video, off): PNG files in `hle/textures/<title id>/` of your data folder are drawn
+  in place of the game's textures, at any size. "Write the game's textures out" fills that folder's `dump/` with
+  the game's own, each named by its hash: edit or upscale one, keep the name, and put it one folder up.
+- **Automatic texture upscaling** (Settings > Video): the textures a game uses are upscaled 4x by
+  [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN), which comes with the release packages (the `realesrgan`
+  folder; BSD-3, see `licenses/realesrgan.license.txt`). It runs beside the game, a batch every few seconds, and a
+  texture changes to its upscaled picture a few seconds after that is made: a new area sharpens while you are in
+  it, and is sharp from the start the next time. It takes GPU time and video memory in the game. A game's disc is
+  also read once for textures kept in the standard XPR containers, so those are upscaled without the game having
+  shown them.
+- **HD texture packs to share**: a game's menu has "Export HD texture pack", which writes
+  `texture packs/exported/<game> [<title id>] HD textures.zip`. To install one, put the zip into the
+  `texture packs` folder and start xbased.
 - **CRT filters**: soft scanlines, a classic TV, an arcade monitor.
+- **Settings chosen for your PC**: the first start looks at the GPU and the display and sets the render scale,
+  the filtering, the anti-aliasing and automatic texture upscaling (on a discrete GPU of 6 GB or more) to match.
+- **A log per game**: each game's log is kept in the `logs` folder (the 40 newest).
 - Every setting **global or per game**.
 
 </td>
@@ -349,6 +371,8 @@ More options (link-time optimization, the dependencies' location) are in
   changelog are in [docs/hakuX](docs/hakuX/).
 - Box art from the [libretro-thumbnails](https://github.com/libretro-thumbnails)
   project. Interface font: Play (SIL Open Font License).
+- [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN) (ncnn-vulkan build, BSD-3) for automatic texture
+  upscaling; [SMAA](https://github.com/iryoku/smaa) by Jimenez et al. (MIT).
 - SDL3, Zydis, libslirp, libchdr, xxHash, volk, Vulkan Memory Allocator, glslang,
   SPIRV-Reflect and the other components listed in [LICENSE](LICENSE).
 
