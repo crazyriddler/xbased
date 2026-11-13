@@ -1288,6 +1288,9 @@ unsigned hle_draw_fb_stages(const HleCmdDraw *c, uint32_t rt_id)
     if (!g_dr.st.psh) {
         return ff_fb_stages(c, rt_id);
     }
+    if (g_hle_fbdbg == 1) {
+        return 0;
+    }
     unsigned m = 0;
     for (unsigned st = 0; st < HLE_TSS_STAGES; st++) {
         unsigned mode = (g_dr.st.rs[HLE_PS_TEXMODES] >> (5 * st)) & 0x1F;
@@ -1301,6 +1304,14 @@ unsigned hle_draw_fb_stages(const HleCmdDraw *c, uint32_t rt_id)
 
 bool g_hle_fbbar_off;
 int g_hle_gpucut;
+bool hle_draw_is_psh(void)
+{
+    return g_dr.st_valid && g_dr.st.psh;
+}
+/* debug.hakux.fbdbg: an A/B for programs that read the target they
+ * render. 1: the pixel-shader stages go through a copy of the target, sampled at their own texture
+ * coordinates, not fetched at the fragment's pixel; 2: those draws are skipped */
+int g_hle_fbdbg;
 
 void hle_draw_counts(uint64_t *verts, uint64_t *pipes)
 {
@@ -3123,6 +3134,21 @@ void hle_draw_psframe_poll(uint64_t swap)
     if ((unsigned)atoi(v) != g_norec) {
         g_norec = (unsigned)atoi(v);
         hle_log("hakuX-hle-pipe", "norec=%u (1: no state cache, 2: no firstVertex)", g_norec);
+    }
+    v[0] = 0;
+    hle_prop_get("debug.hakux.fbdbg", v);
+    {
+        /* unset or "auto": mode 3 for the titles that need it, else 0. Jade Empire's focus mode draws its
+         * filter from the depth buffer's words (a texture over the depth memory, read as bytes); the
+         * picture that comes out is grey and blocky, on stock xbased and xemu too, and without that draw
+         * it is right (the test modes, 3 against 0, 1 and 2) */
+        const bool autom = !v[0] || !strcmp(v, "auto");
+        const int want = autom ? (g_hle.title.xbe.title_id == 0x4d53006du ? 3 : 0) : atoi(v);
+        if (want != g_hle_fbdbg) {
+            g_hle_fbdbg = want;
+            hle_log("hakuX-hle-pipe", "fbdbg=%d%s (1: target reads through a copy, 2: skipped, 3: depth reads "
+                    "skipped)", g_hle_fbdbg, autom ? " (auto)" : "");
+        }
     }
     v[0] = 0;
     hle_prop_get("debug.hakux.probe", v);

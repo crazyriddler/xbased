@@ -191,6 +191,8 @@ extern bool g_hle_fbbar_off;            /* debug (debug.hakux.fbbar=0): no barri
  * the state recorded and no draw, 3 (pass) neither: the passes alone, 4 (tri)
  * draws of 3 vertices scissored to one pixel */
 extern int g_hle_gpucut;
+extern int g_hle_fbdbg;                  /* debug (debug.hakux.fbdbg): programs that read their own target */
+bool hle_draw_is_psh(void);
 /* The vertices drawn and pipelines bound so far (the pass profile, back.c). */
 void hle_draw_counts(uint64_t *verts, uint64_t *pipes);
 void hle_draw_forget_tex(uint32_t id);

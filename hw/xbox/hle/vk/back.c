@@ -2659,6 +2659,20 @@ static void dispatch(const HleCmdHdr *h)
         /* a draw reading the target it renders: the pass renders in
          * RENDERING_LOCAL_READ (reopened once when it was not) */
         unsigned fb = hle_draw_fb_stages(p, g_back.rt);
+        if (g_hle_fbdbg == 2 && fb && hle_draw_is_psh()) {
+            break;                      /* debug: the programs that read their own target skipped */
+        }
+        if (g_hle_fbdbg == 3) {         /* debug: draws sampling a depth buffer's words skipped */
+            bool zr = false;
+            for (unsigned st = 0; st < 4; st++) {
+                const HleCmdDraw *dc = p;
+                const HleVkSurf *t = dc->tex[st] ? hle_surf_get(dc->tex[st]) : NULL;
+                zr |= t && t->zr_src;
+            }
+            if (zr) {
+                break;
+            }
+        }
         HleVkSurf *fbrt = fb ? hle_surf_get(g_back.rt) : NULL;
         if (fbrt && !fbrt->general && !fbrt->local_read) {
             fbrt->local_read = true;
