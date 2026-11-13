@@ -12,7 +12,8 @@ struct ANativeWindow;
 
 /* A frame smaller than its place in the window: scaled up bilinearly, or by
  * AMD FidelityFX Super Resolution 1 (a larger one is always averaged down). */
-enum { HLE_UPSCALE_BILINEAR, HLE_UPSCALE_FSR, HLE_UPSCALE_NEAREST };
+/* NIS: its sharpness (percent) in the bits above the kind (upscale >> 8) */
+enum { HLE_UPSCALE_BILINEAR, HLE_UPSCALE_FSR, HLE_UPSCALE_NEAREST, HLE_UPSCALE_NIS };
 
 /* This refresh would put up what win already shows (the same front frame,
  * gamma ramp, window and swapchain, and key: the caller's placement and
@@ -20,6 +21,12 @@ enum { HLE_UPSCALE_BILINEAR, HLE_UPSCALE_FSR, HLE_UPSCALE_NEAREST };
  * it, the panel keeping the image. A 30 fps title on a 120 Hz panel drew,
  * submitted and presented each frame four times. */
 bool hle_present_unchanged(struct ANativeWindow *win, uint64_t key);
+
+/* Frame interpolation: with an in-between frame on the display, the time (the monotonic clock's, ns) the frame
+ * itself is due, when hle_present_unchanged stops saying so; 0 with none. The caller waits no longer than that.
+ * (Without it the in-between frame was presented again and again until then: under V-Sync a queue of them,
+ * two refreshes of delay; without V-Sync a present loop as fast as the GPU went.) */
+int64_t hle_present_due_ns(void);
 
 /* Each display refresh, on the window's thread, these three in order.
  * begin: an image of win's swapchain (made or remade as the window comes,
@@ -32,7 +39,9 @@ bool hle_present_begin(struct ANativeWindow *win, uint32_t *w, uint32_t *h);
 bool hle_present_frame(uint32_t *w, uint32_t *h);
 /* end: the frame drawn into the window's middle (sx, sy: its half size in
  * clip space, 1 the whole window), the rest black, through the display's
- * gamma ramp, and presented. fxaa: FXAA over each new frame first; average:
+ * gamma ramp, and presented. fxaa: FXAA over each new frame first (upscale: its low byte the
+ * upscaling, bits 8-15 NIS's sharpness, bit 16 SMAA in place of FXAA, bit 17 an in-between frame
+ * for games slower than the refresh); average:
  * false samples a frame larger than its place bilinearly too (comparisons).
  * key: what hle_present_unchanged compares next. */
 void hle_present_end(float sx, float sy, bool fxaa, int upscale, bool average, uint64_t key);
@@ -45,6 +54,8 @@ void hle_present_shot(const char *path);
 void hle_present_set_crt(int kind);
 /* V-Sync on (the default) or off (tearing): applied at the next frame */
 void hle_present_set_vsync(bool on);
+/* The display's refresh rate (0: unknown, taken as 60): which games frame interpolation is for. */
+void hle_present_set_refresh(float hz);
 /* The frame rate shown in the window's corner, 0 none (any thread). */
 void hle_present_set_osd(float fps);
 /* Windows: the pictures drawn for the game's frame (vk/share.h, token: its

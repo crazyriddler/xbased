@@ -25,6 +25,11 @@ README=$REPO/docs/xbased/README.md; [ -f "$README" ] || README=$REPO/README.md
 cp "$README" "$REPO/COPYING" "$REPO/LICENSE" "$APPDIR/usr/share/doc/xbased/"
 cp -r "$REPO/licenses" "$APPDIR/usr/share/doc/xbased/licenses"
 
+# Real-ESRGAN for automatic texture upscaling (fetch_realesrgan.sh makes the folder): beside the binary
+if [ -n "${REALESRGAN_DIR:-}" ] && [ -x "$REALESRGAN_DIR/realesrgan-ncnn-vulkan" ]; then
+  cp -r "$REALESRGAN_DIR" "$APPDIR/usr/bin/realesrgan"
+fi
+
 cat > "$APPDIR/usr/share/applications/xbased.desktop" <<EOF
 [Desktop Entry]
 Type=Application
