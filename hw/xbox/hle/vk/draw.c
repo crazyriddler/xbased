@@ -1302,6 +1302,36 @@ unsigned hle_draw_fb_stages(const HleCmdDraw *c, uint32_t rt_id)
 bool g_hle_fbbar_off;
 int g_hle_gpucut;
 
+/* debug.hakux.dskip: draws left out, to find which ones make a picture artifact; unset or "auto" picks per
+ * title. 1: vertices of 4 bytes or less; 2: depth test off and blending on; 3: depth test off; 4: 132 vertices
+ * or more; 5, 6, 7: depth off and blended, with vertices of 28 bytes, of 256 or more, of any other size above 4;
+ * 8: modes 1 and 6 together. From Russia with Love (45410079) gets mode 8: its full-screen glow passes (256-byte vertices, depth test off,
+ * blended) sample the depth buffer as a texture to hide lights behind walls; that read is wrong here, and the
+ * passes put lights through walls, and the final stride-4 composite of their half-size buffer puts glass-shard
+ * wedges on screen; mode 8 leaves out both. Without them the picture is right (the light bloom goes too). */
+static int g_dskip;
+bool hle_draw_dskip(const void *p)
+{
+    const HleCmdDraw *c = p;
+    if (!g_dskip || !g_dr.st_valid) {
+        return false;
+    }
+    const uint32_t *rs = g_dr.st.rs;
+    const uint32_t stride = c->nbind ? c->bind_stride[0] : c->stride;
+    const bool zoff_blend = !rs[RS_ZENABLE] && rs[RS_ALPHABLENDENABLE];
+    switch (g_dskip) {
+    case 1: return stride <= 4;
+    case 2: return zoff_blend;
+    case 3: return !rs[RS_ZENABLE];
+    case 4: return c->count >= 132;
+    case 5: return zoff_blend && stride == 28;
+    case 6: return zoff_blend && stride >= 256;
+    case 7: return zoff_blend && stride > 4 && stride != 28 && stride < 256;
+    case 8: return stride <= 4 || (zoff_blend && stride >= 256);
+    }
+    return false;
+}
+
 void hle_draw_counts(uint64_t *verts, uint64_t *pipes)
 {
     *verts = g_dr.verts;
@@ -3123,6 +3153,19 @@ void hle_draw_psframe_poll(uint64_t swap)
     if ((unsigned)atoi(v) != g_norec) {
         g_norec = (unsigned)atoi(v);
         hle_log("hakuX-hle-pipe", "norec=%u (1: no state cache, 2: no firstVertex)", g_norec);
+    }
+    v[0] = 0;
+    hle_prop_get("debug.hakux.dskip", v);
+    {
+        const bool autom = !v[0] || !strcmp(v, "auto");
+        int want = autom ? (g_hle.title.xbe.title_id == 0x45410079u ? 8 : 0) : atoi(v);
+        want = want < 0 ? 0 : want > 8 ? 8 : want;
+        if (want != g_dskip) {
+            g_dskip = want;
+            hle_log("hakuX-hle-pipe", "dskip=%d%s (1: vertices of 4 bytes or less left out, 2: depth test off and "
+                    "blending, 3: depth test off, 4: 132 vertices or more, 5-7: depth off and blended by vertex size, 8: modes 1 and 6 together)",
+                    g_dskip, autom ? " (auto)" : "");
+        }
     }
     v[0] = 0;
     hle_prop_get("debug.hakux.probe", v);

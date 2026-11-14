@@ -2656,6 +2656,9 @@ static void dispatch(const HleCmdHdr *h)
         hle_draw_cmd_tex(p, cb_get());
         break;
     case HLE_OP_DRAW: {
+        if (hle_draw_dskip(p)) {
+            break;                      /* a class of draws left out (debug.hakux.dskip, auto for some titles) */
+        }
         /* a draw reading the target it renders: the pass renders in
          * RENDERING_LOCAL_READ (reopened once when it was not) */
         unsigned fb = hle_draw_fb_stages(p, g_back.rt);
