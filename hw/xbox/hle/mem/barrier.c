@@ -635,6 +635,11 @@ void hle_barrier_guard_stats(uint64_t *neighbours, uint64_t *hot)
 #define RPT_PAGES   8
 #define RPT_PENDING 256
 #define RPT_WAIT_NS 30000000ll
+/* A title whose gate mostly gives up (Star Wars: Republic Commando: ~25 % of its reads waited the whole 30 ms for a
+ * report that was never written, ~25 s of a 5 minute run with the guest's CPU held, no interrupt taken: its flips
+ * came 30 to 45 ms late) waits this long instead (the share of recent reads that gave up, over 15 %). */
+#define RPT_WAIT_SHORT_NS 6000000ll
+static float g_rpt_giveup;                /* the share of recent waits that gave up (moving average) */
 static struct {
     uint32_t page[RPT_PAGES];           /* pa >> 12 */
     bool shut[RPT_PAGES];               /* without guest access */
@@ -812,7 +817,8 @@ static bool rpt_access(uint32_t pa)
             late = rpt_late((unsigned)pg, frame, &ahead);
             /* the decoder short of a report and waiting on this thread */
             const bool stuck = late && ahead && held && held();
-            if (late && (stuck || hle_now_ns() - t0 > RPT_WAIT_NS)) {
+            const int64_t limit = g_rpt_giveup > 0.15f ? RPT_WAIT_SHORT_NS : RPT_WAIT_NS;
+            if (late && (stuck || hle_now_ns() - t0 > limit)) {
                 /* the back end won't write them now (stuck), or at all (a
                  * test the decoder dropped): not waited for again */
                 for (unsigned k = 0; k < RPT_PENDING; k++) {
@@ -823,9 +829,12 @@ static bool rpt_access(uint32_t pa)
                 }
                 if (stuck) {
                     g_rpt.held++;
-                } else if (g_rpt.timeouts++ < 8) {
-                    hle_log("hakuX-hle-pb", "report gate: page %08x's reports not written in 30 ms",
-                            g_rpt.page[pg] << 12);
+                } else {
+                    g_rpt_giveup = 0.9f * g_rpt_giveup + 0.1f;
+                    if (g_rpt.timeouts++ < 8) {
+                        hle_log("hakuX-hle-pb", "report gate: page %08x's reports not written in %lld ms",
+                                g_rpt.page[pg] << 12, (long long)(limit / 1000000));
+                    }
                 }
                 late = false;
             }
@@ -837,6 +846,9 @@ static bool rpt_access(uint32_t pa)
         }
         __atomic_store_n(&g_rpt_waiting, 0, __ATOMIC_RELEASE);
         hle_host_guest_hold(false);
+        if (hle_now_ns() - t0 <= RPT_WAIT_SHORT_NS) {
+            g_rpt_giveup *= 0.9f;           /* it came: the gate is worth its wait */
+        }
         g_rpt.waits++;
         g_rpt.ns += (uint64_t)(hle_now_ns() - t0);
     }
