@@ -6,10 +6,13 @@
 #include "native/app/ui/dash.h"
 #include "native/app/ui/console_cfg.h"
 #include "native/app/ui/dash_int.h"
+#include "native/app/ui/hwtune.h"
+#include "native/app/ui/texshare.h"
 #include "native/app/ui/shortcut.h"
 #include "native/app/ui/sound.h"
 #include "native/app/ui/update.h"
 
+#include "native/core/nc.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -2099,6 +2102,24 @@ static void SDLCALL cover_file_cb(void *ud, const char *const *files, int filter
     }
 }
 
+
+/* A game's menu row: its upscaled and hand-made textures zipped into "texture packs/exported/" for another PC
+ * (texshare.c). The zip is written at once: a large pack holds the menu for some seconds. */
+static void export_pack_row(List *l, const XdGame *g)
+{
+    if (!list_row(l, T(S_PACK_EXPORT), NULL, NULL)) {
+        return;
+    }
+    char out[1500], msg[1700];
+    const int n = texshare_export(cfg_data_dir(), g->title_id, g->title, out, sizeof(out));
+    if (n > 0) {
+        snprintf(msg, sizeof(msg), T(S_PACK_EXPORTED), n, out);
+    } else {
+        snprintf(msg, sizeof(msg), "%s", T(n ? S_PACK_EXPORT_FAILED : S_PACK_EXPORT_NONE));
+    }
+    dash_toast(msg);
+}
+
 /* The game's name, edited in place: Enter (A) to type and again to keep,
  * Esc to leave it; kept empty, the disc's own again. */
 static void rename_row(List *l, LibGame *g)
@@ -2190,6 +2211,7 @@ static void scr_game(void)
         D.sel[SCR_GAME_SETTINGS] = 0;
         dash_push(SCR_GAME_SETTINGS);
     }
+    export_pack_row(&l, &D.cur->g);
     if (list_row(&l, T(S_MODS), NULL, NULL)) {
         D.editing_game = true;
         D.sel[SCR_MODS] = 0;
@@ -2418,8 +2440,28 @@ int dash_run(SDL_Window *win, const char *exe)
         cfg_unset(&D.global, "uncap");
         cfg_save(&D.global);
     }
+    {
+        /* the picture settings this PC is good for: once, and again when asked (hwtune.c) */
+        char note[700];
+        if (hwtune_apply(&D.global, win, note, sizeof(note))) {
+            cfg_save(&D.global);
+            SDL_Log("xbased: %s", note);
+        }
+    }
+    const Uint64 t_start = SDL_GetTicks();
+    nc_log("hakuX-app", "start-up: dashboard begins %llu ms after SDL started", (unsigned long long)t_start);
     i18n_set(cfg_get(&D.global, "ui.lang"));
     cc_sync(&D.global);     /* the EEPROM changed by hand or by a title meanwhile */
+    {
+        /* HD texture packs put into "texture packs/": installed (texshare.c) */
+        char note[300];
+        texshare_import_all(cfg_data_dir(), note, sizeof(note));
+        if (note[0]) {
+            dash_toast(note);
+        }
+    }
+    const Uint64 t_tex = SDL_GetTicks();
+    nc_log("hakuX-app", "start-up: settings, hardware tuning and texture packs took %llu ms", (unsigned long long)(t_tex - t_start));
     upd_cleanup();
     if (cfg_bool(&D.global, "update.check", true)) {
         upd_check_start(XBASED_VERSION);
@@ -2434,7 +2476,10 @@ int dash_run(SDL_Window *win, const char *exe)
      * focus); while a game runs their events are only drained (the loop
      * below), the game's process reads them */
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    const Uint64 t_ui = SDL_GetTicks();
+    nc_log("hakuX-app", "start-up: update check, window and fonts took %llu ms", (unsigned long long)(t_ui - t_tex));
     snd_init();
+    nc_log("hakuX-app", "start-up: sounds took %llu ms", (unsigned long long)(SDL_GetTicks() - t_ui));
     const char **fv;
     int fn;
     folders(&fv, &fn);
@@ -2443,6 +2488,7 @@ int dash_run(SDL_Window *win, const char *exe)
         /* box art for games without, once the scan is done (lib_poll) */
     }
     bool was_scanning = true;
+    bool first_frame = true;
     while (!D.quit) {
         lib_set_busy(child_running());  /* the scan goes on while a game plays, gently */
         if (child_running()) {
@@ -2465,6 +2511,10 @@ int dash_run(SDL_Window *win, const char *exe)
             wait_child();
             SDL_Delay(50);
             continue;
+        }
+        if (first_frame) {
+            first_frame = false;
+            nc_log("hakuX-app", "start-up: first frame at %llu ms", (unsigned long long)SDL_GetTicks());
         }
         poll_input();
         auto_poll();
@@ -2669,6 +2719,7 @@ static void scr_ingame(void)
         D.sel[SCR_GAME_SETTINGS] = 0;
         dash_push(SCR_GAME_SETTINGS);
     }
+    export_pack_row(&l, &D.cur->g);
     if (list_row(&l, T(S_CONTROLS), NULL, NULL)) {
         D.editing_game = false;
         D.player = 0;

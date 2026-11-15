@@ -1,7 +1,9 @@
 param(
     [string]$Build = (Join-Path $PSScriptRoot "..\..\..\build\win"),
     [string]$Out = (Join-Path $PSScriptRoot "..\..\..\dist"),
-    [string]$Version = "1.0.35"
+    [string]$Version = "1.0.35",
+    # fetch_realesrgan.sh's windows\realesrgan folder (automatic texture upscaling); optional
+    [string]$RealEsrgan = ""
 )
 # xbased's Windows release: the executable, its fonts and mods, the docs
 # and licenses, in dist\xbased-<version>-windows-x64 and its .zip.
@@ -28,6 +30,10 @@ Copy-Item $readme (Join-Path $dst "README.md")
 Copy-Item (Join-Path $repo "COPYING") $dst
 Copy-Item (Join-Path $repo "LICENSE") $dst
 Copy-Item -Recurse (Join-Path $repo "licenses") (Join-Path $dst "licenses")
+# Real-ESRGAN, unmodified, beside the executable: automatic texture upscaling finds it there
+if ($RealEsrgan -and (Test-Path (Join-Path $RealEsrgan "realesrgan-ncnn-vulkan.exe"))) {
+    Copy-Item -Recurse $RealEsrgan (Join-Path $dst "realesrgan")
+}
 # the executable keeps its settings and data beside it
 "xbased keeps its settings, saves and states in this folder." | Set-Content -Encoding ascii (Join-Path $dst "portable.txt")
 $zip = Join-Path $Out "$name.zip"

@@ -571,6 +571,18 @@ EXPORT int SDL_main(int argc, char *argv[])
         if (!strncmp(argv[i], "fxaa=", 5)) {
             nc_present_set_fxaa(atoi(argv[i] + 5) != 0);
         }
+        if (!strncmp(argv[i], "smaa=", 5)) {
+            nc_present_set_smaa(atoi(argv[i] + 5) != 0);
+        }
+        if (!strncmp(argv[i], "sharpen=", 8)) {
+            nc_present_set_sharpen(atoi(argv[i] + 8));
+        }
+        if (!strncmp(argv[i], "integer=", 8)) {
+            nc_present_set_integer(atoi(argv[i] + 8) != 0);
+        }
+        if (!strncmp(argv[i], "interp=", 7)) {
+            nc_present_set_interp(atoi(argv[i] + 7) != 0);
+        }
         if (!strncmp(argv[i], "upscale=", 8)) {
             nc_present_set_upscale(nc_upscale_from_name(argv[i] + 8));
         }

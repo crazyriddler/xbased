@@ -73,6 +73,23 @@ bool nc_option(NcOptions *o, const char *arg)
     } else if ((v = value(arg, "aniso="))) {
         nc_hle_set_anisotropy(atoi(v));
         nc_log("hakuX-app", "anisotropic filtering %sx", v);
+    } else if ((v = value(arg, "mvstat="))) {
+        /* a measurement for motion vectors (hw/xbox/hle/pb/pbdraw.c mv_note): read at the first draw */
+        nc_hle_set_mvstat(atoi(v) != 0);
+        nc_log("hakuX-app", "motion statistics %s", atoi(v) ? "on" : "off");
+    } else if ((v = value(arg, "texpack="))) {
+        nc_hle_set_texpack(1, atoi(v) != 0);
+        nc_log("hakuX-app", "texture packs %s", atoi(v) ? "on" : "off");
+    } else if ((v = value(arg, "texlive="))) {
+        nc_hle_set_texpack(8, atoi(v) != 0);
+    } else if ((v = value(arg, "texcap="))) {
+        nc_hle_set_texpack_cap(atoi(v));
+    } else if ((v = value(arg, "texauto="))) {
+        nc_hle_set_texpack(4, atoi(v) != 0);
+        nc_log("hakuX-app", "automatic texture upscaling %s", atoi(v) ? "on" : "off");
+    } else if ((v = value(arg, "texdump="))) {
+        nc_hle_set_texpack(2, atoi(v) != 0);
+        nc_log("hakuX-app", "texture dump %s", atoi(v) ? "on" : "off");
     } else if ((v = value(arg, "scale="))) {
         nc_hle_set_render_scale(atoi(v));
         nc_log("hakuX-app", "render scale %sx", v);

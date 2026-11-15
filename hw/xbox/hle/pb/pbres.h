@@ -22,6 +22,15 @@ uint32_t hle_draw_tex_define(uint32_t id, const uint32_t h5[5], const uint32_t *
                              uint32_t *bytes);
 /* The span of guest memory header words h5's texels take (0: not a texture) */
 uint32_t hle_draw_tex_bytes(const uint32_t h5[5]);
+/* The definition just made left a texture pack's picture for later (no room in the arena now): asked once after
+ * each hle_draw_tex_define; the caller defines the texture again a frame on. */
+bool hle_draw_tex_pack_deferred(void);
+/* The definition just made has no texture pack picture yet but one is being made (the upscaler beside the
+ * game): asked once after each hle_draw_tex_define; *hash is what hle_texpack_ready takes. */
+bool hle_draw_tex_pack_pending(uint64_t *hash);
+/* A texture as a file on the disc holds it: see pbres.c. */
+bool hle_draw_tex_scan(const uint32_t common, uint32_t format, uint32_t size, const uint8_t *data, size_t avail,
+                       uint64_t *hash, uint8_t **rgba, uint32_t *w, uint32_t *h);
 /* The video overlay's surface (header words h5, YUY2 / UYVY) as B8G8R8A8 in
  * the arena: its offset, HLE_ARENA_FULL = none. */
 uint32_t hle_draw_overlay_upload(const uint32_t h5[5], uint32_t *w, uint32_t *h);
