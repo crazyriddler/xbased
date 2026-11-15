@@ -51,6 +51,8 @@
 
 #define E_OFFSET 0xABE80000ull      /* the E: partition (Partition1) on the disk */
 #define E_SIZE 0x1312D6000ull
+#define C_OFFSET 0x8CA80000ull      /* the C: partition (Partition2): the dashboard's */
+#define C_SIZE 0x1F400000ull
 #define MAX_FILE (128u << 20)
 #define MAX_TITLES 512
 #define MAX_FILES 8192
@@ -1203,6 +1205,77 @@ bool xi_take_report(XiReport *out)
     }
     *out = g_report;
     return true;
+}
+
+/* ------------------------------------------------------------ the dashboard */
+
+static SDL_AtomicInt g_dash_state;      /* 0 idle, 1 reading, 2 done, 3 failed */
+static char g_dash_src[1100], g_dash_hdd[1100], g_dash_err[300];
+
+static int dash_thread(void *arg)
+{
+    (void)arg;
+    Disk disk;
+    memset(&disk, 0, sizeof(disk));
+    Run *r = calloc(1, sizeof(Run));
+    bool ok = false;
+    g_dash_err[0] = 0;
+    if (!r) {
+        snprintf(g_dash_err, sizeof(g_dash_err), "out of memory");
+    } else if (!disk_open(&disk, g_dash_src)) {
+        snprintf(g_dash_err, sizeof(g_dash_err), "%s", disk.err);
+    } else if (!disk.qcow) {
+        snprintf(g_dash_err, sizeof(g_dash_err), "not a qcow2 image");
+    } else if (!fatx_open(&r->fx, &disk, C_OFFSET, C_SIZE)) {
+        snprintf(g_dash_err, sizeof(g_dash_err), "the image has no C: drive xbased can read");
+    } else {
+        char to[1200];
+        snprintf(to, sizeof(to), "%s/Partition2", g_dash_hdd);
+        copy_tree(r, r->fx.root, to, "", 0);
+        char xbe[1300];
+        snprintf(xbe, sizeof(xbe), "%s/xboxdash.xbe", to);
+        if (r->failed) {
+            snprintf(g_dash_err, sizeof(g_dash_err), "%s", r->err);
+        } else if (!SDL_GetPathInfo(xbe, NULL)) {
+            snprintf(g_dash_err, sizeof(g_dash_err), "the image's C: drive has no xboxdash.xbe");
+        } else {
+            ok = true;
+        }
+    }
+    disk_close(&disk);
+    free(r);
+    SDL_SetAtomicInt(&g_dash_state, ok ? 2 : 3);
+    return 0;
+}
+
+void xi_dash_start(const char *qcow2, const char *hdd)
+{
+    if (!SDL_CompareAndSwapAtomicInt(&g_dash_state, 0, 1)) {
+        return;
+    }
+    snprintf(g_dash_src, sizeof(g_dash_src), "%s", qcow2);
+    snprintf(g_dash_hdd, sizeof(g_dash_hdd), "%s", hdd);
+    SDL_Thread *t = SDL_CreateThread(dash_thread, "dash-image", NULL);
+    if (t) {
+        SDL_DetachThread(t);
+    } else {
+        SDL_SetAtomicInt(&g_dash_state, 0);
+    }
+}
+
+int xi_dash_state(void)
+{
+    return SDL_GetAtomicInt(&g_dash_state);
+}
+
+const char *xi_dash_take(void)
+{
+    const int st = SDL_GetAtomicInt(&g_dash_state);
+    if (st < 2) {
+        return NULL;
+    }
+    SDL_SetAtomicInt(&g_dash_state, 0);
+    return st == 2 ? "" : g_dash_err;
 }
 
 /* ------------------------------------------------------------ downloads */

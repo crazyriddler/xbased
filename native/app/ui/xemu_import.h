@@ -33,6 +33,13 @@ bool xi_running(void);
 /* The last import's outcome, once (true when there was one to take). */
 bool xi_take_report(XiReport *out);
 
+/* The Xbox dashboard from a qcow2 hard disk image: the files of its C: drive
+ * copied into hdd's Partition2 (a thread). xi_dash_state: 0 idle, 1 reading;
+ * xi_dash_take: NULL while reading, once done "" (ok) or why it failed. */
+void xi_dash_start(const char *qcow2, const char *hdd);
+int xi_dash_state(void);
+const char *xi_dash_take(void);
+
 /* Downloaded content and title updates copied in by hand for a title (any
  * ContentMeta.xbx under hdd's Partition1/TDATA/<title id>, its $c and $u
  * folders) signed for this console, as a game started from the dashboard

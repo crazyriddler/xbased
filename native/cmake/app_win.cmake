@@ -24,6 +24,7 @@ set(NC_APP_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/dash_memory.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/dash_browse.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/dash_find.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/ogdash.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/xemu_import.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/update.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/shortcut.c"
