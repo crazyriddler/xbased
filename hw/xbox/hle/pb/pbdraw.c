@@ -262,6 +262,7 @@ static struct {
      * attributes' current values as its position's last word came), or an
      * inline array's words */
     bool in_draw;
+    bool begin_dirty;                   /* a register changed since the draw's Begin (a repeated one restarts) */
     uint32_t prim;
     uint32_t dm[12];                    /* debug: the draw's first methods (method << 16 | value) */
     unsigned ndm;
@@ -4362,6 +4363,10 @@ void hle_pbd_method(uint32_t m, uint32_t v)
         g_pd.dm[g_pd.ndm++] = m << 16 | (v & 0xFFFF);
     }
 #endif
+    if (g_pd.in_draw && g_pd.r[m >> 2] != v && m != NV097_ARRAY_ELEMENT16 && m != NV097_ARRAY_ELEMENT32 &&
+        m != NV097_DRAW_ARRAYS && m != NV097_INLINE_ARRAY && m != NV097_SET_BEGIN_END) {
+        g_pd.begin_dirty = true;
+    }
     if (g_pd.r[m >> 2] != v && (g_ff_regs[m >> 8] >> ((m >> 2) & 63) & 1)) {
         g_pd.ffgen++;                       /* (D3D sends matrices again unchanged) */
     }
@@ -4434,6 +4439,15 @@ void hle_pbd_method(uint32_t m, uint32_t v)
         break;
     case NV097_SET_BEGIN_END:
         if (v) {
+            /* A Begin while a draw is open, of the same list primitive (points, lines, triangles, quads), and no
+             * register changed since the first: the draw goes on. Jedi Knight: Jedi Academy pushes Begin again in
+             * the middle of its element index lists, and the restart threw away the indices before it (missing
+             * triangles; xemu #2221). A strip or fan restarts as before, and so does a draw whose registers
+             * changed in between (Thrillville's coaster track changes its vertex arrays between Begins). */
+            if (g_pd.in_draw && v == g_pd.prim && (v == 1 || v == 2 || v == 5 || v == 8) && !g_pd.begin_dirty) {
+                break;
+            }
+            g_pd.begin_dirty = false;
             g_pd.in_draw = true;
             g_pd.prim = v;
             g_pd.nidx = g_pd.nimm = g_pd.ninl = 0;
