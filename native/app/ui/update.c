@@ -28,6 +28,8 @@
 #define UPD_OLD ".xbased-old"
 #ifdef _WIN32
 #define ASSET_SUFFIX "-windows-x64.zip"
+#elif defined(__APPLE__)
+#define ASSET_SUFFIX "-macos.zip"
 #else
 #define ASSET_SUFFIX "-x86_64.AppImage"
 #endif

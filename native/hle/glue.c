@@ -219,7 +219,9 @@ static void smp_setup(void)
 #else
 static void smp_signal(int sig, siginfo_t *si, void *uc)
 {
-#ifdef __x86_64__
+#if defined(__x86_64__) && defined(__APPLE__)
+    const uintptr_t pc = (uintptr_t)((ucontext_t *)uc)->uc_mcontext->__ss.__rip;
+#elif defined(__x86_64__)
     const uintptr_t pc = (uintptr_t)((ucontext_t *)uc)->uc_mcontext.gregs[REG_RIP];
 #else
     const uintptr_t pc = (uintptr_t)((ucontext_t *)uc)->uc_mcontext.pc;

@@ -451,6 +451,35 @@ static void mount_space(const char *path, const char *fs, char *sub, size_t cap)
     }
 }
 
+#ifdef __APPLE__
+#include <sys/mount.h>
+
+static void drives(void)
+{
+    char sub[160];
+    mount_space("/", NULL, sub, sizeof(sub));
+    place_add("/", T(S_BR_ROOT), sub, PK_ROOT, 2);
+    struct statfs *m = NULL;
+    const int n = getmntinfo(&m, MNT_NOWAIT);
+    for (int i = 0; i < n; i++) {
+        const char *mnt = m[i].f_mntonname, *fs = m[i].f_fstypename;
+        if (!strcmp(mnt, "/") || (m[i].f_flags & MNT_DONTBROWSE) || strncmp(mnt, "/Volumes/", 9) ||
+            access(mnt, R_OK | X_OK) != 0) {
+            continue;
+        }
+        const bool net = !(m[i].f_flags & MNT_LOCAL) || !strcmp(fs, "smbfs") || !strcmp(fs, "nfs") ||
+                         !strcmp(fs, "afpfs") || !strcmp(fs, "webdav");
+        const bool optical = !strcmp(fs, "cd9660") || !strcmp(fs, "udf") || !strcmp(fs, "cddafs");
+        const bool usb = !strcmp(fs, "msdos") || !strcmp(fs, "exfat") || !strcmp(fs, "ntfs");
+        if (net) {
+            snprintf(sub, sizeof(sub), "%s  ·  %s", fs, m[i].f_mntfromname);
+        } else {
+            mount_space(mnt, fs, sub, sizeof(sub));
+        }
+        place_add(mnt, base_name(mnt), sub, net ? PK_NETWORK : optical ? PK_OPTICAL : usb ? PK_REMOVABLE : PK_DISK, 2);
+    }
+}
+#else
 static void drives(void)
 {
     char sub[160];
@@ -514,6 +543,7 @@ static void drives(void)
         fclose(f);
     }
 }
+#endif
 #endif
 
 static void places_load(void)

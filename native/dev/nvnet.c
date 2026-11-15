@@ -405,7 +405,7 @@ static bool rx_ready(Nvnet *s)
 
 /* The receive filter: broadcast always, everything unless MYADDR filtering
  * is on, then the multicast address under its mask, then our MAC. */
-static bool accept(const Nvnet *s, const uint8_t *f, size_t len)
+static bool rx_accept(const Nvnet *s, const uint8_t *f, size_t len)
 {
     static const uint8_t bcast[6] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
     if (len < 14) {
@@ -461,7 +461,7 @@ static bool receive_one(Nvnet *s)
         return false;
     }
     size_t len = nc_net_recv(buf, sizeof(buf));
-    if (!len || !accept(s, buf, len)) {
+    if (!len || !rx_accept(s, buf, len)) {
         return true;                        /* taken, not for us */
     }
     if (len < 60) {                         /* padded to Ethernet's least, as the wire has it */

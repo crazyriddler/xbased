@@ -40,9 +40,13 @@ void nc_win_thread_priority(int level);
 static inline DWORD GetModuleFileNameA(void *m, char *out, DWORD n)
 {
     (void)m;
+#ifdef __APPLE__
+    return (DWORD)nc_exe_path(out, n);
+#else
     const ssize_t k = readlink("/proc/self/exe", out, n - 1);
     out[k > 0 ? k : 0] = 0;
     return k > 0 ? (DWORD)k : 0;
+#endif
 }
 
 static inline DWORD GetFileAttributesA(const char *p)

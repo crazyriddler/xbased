@@ -35,7 +35,7 @@
  * sizes from the assembly instead) */
 #ifdef NC_STATE_PROBE
 #define NC_REC(T, size) const unsigned long nc_probe_size_##T = sizeof(T);
-#elif defined(_WIN32)
+#elif defined(_WIN32) || defined(__APPLE__)
 /* Windows' host types (its pthread mutexes, NC_SKIP members) have other
  * sizes: the sizes are Android's; the members are still checked below. */
 #define NC_REC(T, size)

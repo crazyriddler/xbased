@@ -15,7 +15,9 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/mman.h>
+#ifndef __APPLE__
 #include <sys/syscall.h>
+#endif
 #include <time.h>
 #include <unistd.h>
 
@@ -140,11 +142,15 @@ typedef struct MEMORY_BASIC_INFORMATION {
 static inline SIZE_T VirtualQuery(LPCVOID addr, MEMORY_BASIC_INFORMATION *mbi, SIZE_T len)
 {
     (void)len;
-    unsigned char v;
     void *page = (void *)((uintptr_t)addr & ~(uintptr_t)0xFFF);
     mbi->BaseAddress = page;
     mbi->RegionSize = 0x1000;
+#ifdef __APPLE__
+    mbi->State = nc_page_mapped(page) ? MEM_COMMIT : 0;
+#else
+    unsigned char v;
     mbi->State = mincore(page, 0x1000, &v) == 0 ? MEM_COMMIT : 0;
+#endif
     return sizeof(*mbi);
 }
 
@@ -196,7 +202,11 @@ static inline LONG64 InterlockedIncrement64(volatile LONG64 *v)
 
 static inline DWORD GetCurrentThreadId(void)
 {
+#ifdef __APPLE__
+    return (DWORD)gettid();
+#else
     return (DWORD)syscall(SYS_gettid);
+#endif
 }
 
 static inline void Sleep(DWORD ms)
