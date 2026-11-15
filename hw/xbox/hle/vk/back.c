@@ -2892,6 +2892,17 @@ static void *render_thread(void *opaque)
     return NULL;
 }
 
+/* The upload arena: 32 MiB (64 without BC textures, which then go up decoded); 256 with texture packs on, whose
+ * pictures are megabytes each (the usual size if the GPU won't give that much). */
+static int arena_init(void)
+{
+    const uint32_t usual = g_hvk.caps.bc ? 32u << 20 : 64u << 20;
+    if ((hle_host_texpack() & 7) && !hle_vk_arena_init(256u << 20)) {
+        return 0;
+    }
+    return hle_vk_arena_init(usual);
+}
+
 int hle_back_start(void)
 {
     if (g_back.running) {
@@ -2906,9 +2917,10 @@ int hle_back_start(void)
         }
         return r;
     }
-    /* DXT decoded on the way in (no BC: pbres.c) takes four to eight times the bytes */
+    /* DXT decoded on the way in (no BC: pbres.c) takes four to eight times the bytes; texture packs' pictures
+     * are megabytes each and only go up into room that is free (pbres.c texpack_define) */
     const char *what = hle_vk_guest_ram_init() ? "guest RAM" :
-                       hle_vk_arena_init(g_hvk.caps.bc ? 32u << 20 : 64u << 20) ? "the upload arena" :
+                       arena_init() ? "the upload arena" :
                        hle_vk_land_init(16u << 20) ? "the readback buffer" :
                        hle_fe_init() ? "the front end" :
                        hle_tl_init(on_complete) ? "the timeline" :

@@ -202,27 +202,59 @@ static void remove_tree(const char *dir)
 }
 
 /* The files aside from an update (UPD_OLD), gone, in the folder and below. */
-static void remove_old(const char *dir, int depth)
+/* The names in one folder, one level (SDL_GlobDirectory walks the whole tree below, and this folder is the data
+ * folder too: the texture dumps and upscaled pictures made it a minute at every start, each folder walked again). */
+typedef struct {
+    char **v;
+    int n;
+} Names;
+
+static SDL_EnumerationResult SDLCALL name_cb(void *ud, const char *dirname, const char *fname)
 {
-    int n = 0;
-    char **names = SDL_GlobDirectory(dir, NULL, 0, &n);
-    for (int i = 0; names && i < n; i++) {
-        char p[1200];
-        snprintf(p, sizeof(p), "%s/%s", dir, names[i]);
-        SDL_PathInfo pi;
-        if (!SDL_GetPathInfo(p, &pi)) {
-            continue;
-        }
-        const size_t l = strlen(names[i]), ol = strlen(UPD_OLD);
-        if (pi.type == SDL_PATHTYPE_DIRECTORY) {
-            if (depth < 3) {
-                remove_old(p, depth + 1);
-            }
-        } else if (l > ol && !strcmp(names[i] + l - ol, UPD_OLD)) {
-            SDL_RemovePath(p);
+    (void)dirname;
+    Names *z = ud;
+    char **nv = SDL_realloc(z->v, (z->n + 1) * sizeof(char *));
+    if (nv) {
+        z->v = nv;
+        z->v[z->n++] = SDL_strdup(fname);
+    }
+    return SDL_ENUM_CONTINUE;
+}
+
+/* The program's own files left by an update (UPD_OLD) are in its folder and a few levels down: not in the
+ * folders that hold game data (hle, saves, ...), which can hold hundreds of thousands of files. */
+static bool skip_dir(const char *name)
+{
+    static const char *const big[] = { "hle", "dump", "texture packs", "textures", "saves", "eeprom", "covers" };
+    for (size_t i = 0; i < sizeof(big) / sizeof(big[0]); i++) {
+        if (!SDL_strcasecmp(name, big[i])) {
+            return true;
         }
     }
-    SDL_free(names);
+    return false;
+}
+
+static void remove_old(const char *dir, int depth)
+{
+    Names z = { NULL, 0 };
+    SDL_EnumerateDirectory(dir, name_cb, &z);
+    for (int i = 0; i < z.n; i++) {
+        char p[1200];
+        snprintf(p, sizeof(p), "%s/%s", dir, z.v[i]);
+        const size_t l = strlen(z.v[i]), ol = strlen(UPD_OLD);
+        if (l > ol && !strcmp(z.v[i] + l - ol, UPD_OLD)) {
+            SDL_RemovePath(p);
+            continue;
+        }
+        SDL_PathInfo pi;
+        if (depth < 3 && !skip_dir(z.v[i]) && SDL_GetPathInfo(p, &pi) && pi.type == SDL_PATHTYPE_DIRECTORY) {
+            remove_old(p, depth + 1);
+        }
+    }
+    for (int i = 0; i < z.n; i++) {
+        SDL_free(z.v[i]);
+    }
+    SDL_free(z.v);
 }
 
 void upd_cleanup(void)

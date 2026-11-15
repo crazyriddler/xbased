@@ -189,6 +189,13 @@ const char *hle_host_base_path(void);
 int hle_host_render_scale(void);
 /* Anisotropic filtering forced on the game's textures, 0 (the game's) or 2-16. */
 int hle_host_anisotropy(void);
+/* Texture packs (pb/texpack.h): bit 0 use them, bit 1 write the game's textures out, bit 2 both (for the
+ * upscaler run after the game). */
+int hle_host_texpack(void);
+/* The largest side, in pixels, a texture pack's picture is drawn at (0: the most, 2048). */
+int hle_host_texpack_cap(void);
+/* The motion statistics (pb/pbdraw.c mv_note) are asked for. */
+int hle_host_mvstat(void);
 /* vkGetInstanceProcAddr of the Vulkan driver to use (a custom driver's or
  * the system's), as a void pointer; NULL if none. */
 void *hle_host_vk_loader(void);

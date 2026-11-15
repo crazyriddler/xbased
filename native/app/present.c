@@ -11,7 +11,9 @@
 #include "native/dev/dev.h"
 #include "hw/xbox/hle/vk/display.h"
 #include "hw/xbox/hle/vk/swapchain.h"
+#include "hw/xbox/hle/host.h"
 
+#include <math.h>
 #include <string.h>
 #include <sys/system_properties.h>
 #include "hw/xbox/hle/prop.h"
@@ -22,7 +24,10 @@ static bool g_widescreen;
 static int g_overscan;          /* percent: > 0 the edges cut off, < 0 a border */
 static int g_crop_h, g_crop_v;  /* console pixels off each side, off the top and bottom */
 static bool g_fxaa;
+static bool g_smaa, g_interp, g_integer;
+static int g_sharpen;           /* 0 off, 1 to 3: sharpening when no upscaler does it */
 static int g_upscale = NC_UPSCALE_BILINEAR;
+static int g_nis_sharp = 50;
 static bool g_shown;
 
 /* Frame rate from the HLE GPU's presented frames. */
@@ -48,6 +53,7 @@ int nc_upscale_from_name(const char *v)
 {
     return v && (!strcmp(v, "fsr") || !strcmp(v, "sgsr")) ? NC_UPSCALE_FSR
            : v && !strcmp(v, "nearest")                     ? NC_UPSCALE_NEAREST
+           : v && !strcmp(v, "nis")                         ? NC_UPSCALE_NIS
                                                             : NC_UPSCALE_BILINEAR;
 }
 
@@ -55,7 +61,7 @@ bool nc_present_init(void)
 {
     hle_disp_gamma_by_consumer(true); /* before the core starts: frames come without it */
     nc_log("hakuX-app", "present: Vulkan; FXAA %s, upscaling %s", g_fxaa ? "on" : "off",
-           g_upscale == NC_UPSCALE_FSR ? "FSR" : g_upscale == NC_UPSCALE_NEAREST ? "nearest" : "bilinear");
+           g_upscale == NC_UPSCALE_FSR ? "FSR" : g_upscale == NC_UPSCALE_NIS ? "NIS" : g_upscale == NC_UPSCALE_NEAREST ? "nearest" : "bilinear");
     return true;
 }
 
@@ -64,9 +70,39 @@ void nc_present_set_fxaa(bool on)
     g_fxaa = on;
 }
 
+void nc_present_set_smaa(bool on)
+{
+    g_smaa = on;
+}
+
+void nc_present_set_interp(bool on)
+{
+    g_interp = on;
+}
+
+void nc_present_set_sharpen(int level)
+{
+    g_sharpen = level < 0 ? 0 : level > 3 ? 3 : level;
+}
+
+void nc_present_set_integer(bool on)
+{
+    g_integer = on;
+}
+
+void nc_present_set_refresh(float hz)
+{
+    hle_present_set_refresh(hz);
+}
+
 void nc_present_set_upscale(int mode)
 {
     g_upscale = mode;
+}
+
+void nc_present_set_nis_sharpness(int pct)
+{
+    g_nis_sharp = pct < 0 ? 0 : pct > 100 ? 100 : pct;
 }
 
 void nc_present_set_aspect(int mode)
@@ -206,6 +242,19 @@ static void place(uint32_t fw, uint32_t fh, uint32_t ww, uint32_t wh, float *sx,
     growth(&kx, &ky);
     *sx *= kx;
     *sy *= ky;
+    /* Integer scaling: the picture's height a whole number of times the console's lines (the frame's over the
+     * render scale), the largest that fits, its shape kept; a window lower than the console's picture is left
+     * as it is. Each line is then as many window rows as every other. */
+    if (g_integer) {
+        const int rs = hle_host_render_scale();
+        const float lines = (float)fh / (float)(rs > 0 ? rs : 1), tall = *sy * (float)wh;
+        const float n = floorf((float)wh / lines + 0.001f);
+        if (lines >= 1.0f && n >= 1.0f && tall > 0.0f) {
+            const float m = n * lines / tall;
+            *sx *= m;
+            *sy *= m;
+        }
+    }
 }
 
 /* A change of the shape chosen (Settings, the in-game menu's over the
@@ -277,6 +326,26 @@ static void wait_next_frame(uint32_t seen)
 }
 #endif
 
+/* An in-between frame is up (frame interpolation) and the frame itself is due at `due`: wait until then, or
+ * (desktop) until another frame comes. */
+static void wait_due(uint32_t seen, int64_t due)
+{
+    const int64_t left = due - (int64_t)now_ns();
+    if (left <= 0) {
+        return;
+    }
+#ifdef NC_DESKTOP
+    if (left >= 1000000) {
+        hle_disp_wait_front(seen, (int)(left / 1000000));   /* whole milliseconds; the rest the next time round */
+        return;
+    }
+#else
+    (void)seen;
+#endif
+    const struct timespec ts = {(time_t)(due / 1000000000ll), (long)(due % 1000000000ll)};
+    clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL);
+}
+
 bool nc_present_frame(struct ANativeWindow *win)
 {
 #ifdef NC_DESKTOP
@@ -292,14 +361,19 @@ bool nc_present_frame(struct ANativeWindow *win)
     const uint64_t key = (uint64_t)fxaa | (uint64_t)upscale << 1 | (uint64_t)g_dbg.average << 4 |
                          (uint64_t)g_widescreen << 5 | (uint64_t)(uint32_t)g_aspect << 8 |
                          (uint64_t)(uint32_t)(g_overscan + 64) << 16 | (uint64_t)(uint32_t)g_crop_h << 24 |
-                         (uint64_t)(uint32_t)g_crop_v << 32;
+                         (uint64_t)(uint32_t)g_crop_v << 32 | (uint64_t)(uint32_t)g_nis_sharp << 40 |
+                         (uint64_t)g_smaa << 48 | (uint64_t)g_interp << 49 | (uint64_t)g_integer << 50 |
+                         (uint64_t)g_sharpen << 51;
 #ifdef NC_DESKTOP
     const bool as_they_come = !nc_dev_nv2a_vblank_locked() || nc_dev_nv2a_vblank_timed();
 #else
     const bool as_they_come = false;
 #endif
     if (!g_tween_t0 && hle_present_unchanged(win, key)) {
-        if (as_they_come) {
+        const int64_t due = hle_present_due_ns();
+        if (due) {
+            wait_due(fronts, due);
+        } else if (as_they_come) {
             wait_next_frame(fronts);
         } else {
             nc_dev_nv2a_display_pickup(now_ns()); /* it looked: the vblank keeps clear of it */
@@ -327,6 +401,8 @@ bool nc_present_frame(struct ANativeWindow *win)
         __atomic_store_n(&g_shown, true, __ATOMIC_RELAXED);
     }
     hle_present_set_osd(g_show_fps ? (g_fps > 0 ? g_fps : 0.01f) : 0);
-    hle_present_end(sx, sy, fxaa, upscale, g_dbg.average, key);
+    hle_present_end(sx, sy, fxaa, upscale | (g_nis_sharp << 8) | (g_smaa ? 1 << 16 : 0) | (g_interp ? 1 << 17 : 0) |
+                    (g_sharpen << 19),
+                    g_dbg.average, key);
     return true;
 }

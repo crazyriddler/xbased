@@ -57,6 +57,7 @@ add_library(hakux_hle STATIC
   ${NC_HLE}/pb/pbdraw.c
   ${NC_HLE}/pb/pbmode.c
   ${NC_HLE}/pb/pbres.c
+  ${NC_HLE}/pb/texpack.c
   ${NC_HLE}/pb/pbstate.c
   ${NC_HLE}/pb/pusher.c
   ${NC_HLE}/pb/vimm.c

@@ -9,6 +9,8 @@
 #include "hw/xbox/hle/mem/barrier.h"
 #include "hw/xbox/hle/mem/guestmem.h"
 #include "hw/xbox/hle/pb/pbres.h"
+#include "hw/xbox/hle/pb/texpack.h"
+#include <math.h>
 #include "hw/xbox/hle/tex/xdk_res.h"
 #include "hw/xbox/hle/tex/xg_swizzle.h"
 #include "hw/xbox/hle/vk/back.h"
@@ -303,6 +305,322 @@ static bool tex_desc(const uint32_t h5[5], HleResDesc *dp, HleResInfo *rip)
     return true;
 }
 
+/* ---- texture packs (texpack.h) ---- */
+
+/* The largest level of texture d (its first face) as bytes R, G, B, A, as the texture samples: g_free; NULL for
+ * a kind this doesn't decode (a volume, a linear, signed or two-channel format). */
+static uint8_t *tex_rgba(const HleResDesc *d, const HleFmtInfo *fi, const uint8_t *src, const uint32_t *pal)
+{
+    const uint32_t w = d->w, h = d->h;
+    const size_t n = (size_t)w * h;
+    uint32_t pitch, sw, sh, bo;
+    const uint8_t *s = src + hle_res_subresource(d, 0, 0, &pitch);
+    hle_res_level(d, 0, &sw, &sh, &bo);
+    HleXgRect img = { bo, bo, w, h };
+    uint8_t *o = g_malloc(n * 4);
+    if ((fi->flags & HLE_FI_DXT) || d->fmt == HLE_XFMT_P8) {
+        /* both come out as A8R8G8B8 (bytes B, G, R, A) */
+        if (d->fmt == HLE_XFMT_P8) {
+            hle_xg_unswizzle_rect_p8(s, sw, sh, &img, pal, o, w * 4, 0, 0);
+        } else {
+            dxt_volume(d->fmt, s, w, h, 1, (uint32_t *)o);
+        }
+        for (size_t i = 0; i < n; i++) {
+            const uint8_t b = o[i * 4];
+            o[i * 4] = o[i * 4 + 2];
+            o[i * 4 + 2] = b;
+        }
+        return o;
+    }
+    const uint32_t bytes = fi->bpp / 8;
+    if (!(fi->flags & HLE_FI_SWZ) || bytes < 1 || bytes > 4) {
+        g_free(o);
+        return NULL;
+    }
+    g_autofree uint8_t *t = g_malloc(n * bytes);
+    hle_xg_unswizzle_rect(s, sw, sh, &img, t, w * bytes, 0, 0, bytes);
+    for (size_t i = 0; i < n; i++) {
+        const uint8_t *p = t + i * bytes;
+        const unsigned v = bytes == 2 ? (unsigned)(p[0] | p[1] << 8) : p[0];
+        uint8_t r, g, b, a = 255;
+        switch (d->fmt) {
+        case HLE_XFMT_A8R8G8B8: b = p[0]; g = p[1]; r = p[2]; a = p[3]; break;
+        case HLE_XFMT_X8R8G8B8: b = p[0]; g = p[1]; r = p[2]; break;
+        case HLE_XFMT_A8B8G8R8: r = p[0]; g = p[1]; b = p[2]; a = p[3]; break;
+        case HLE_XFMT_B8G8R8A8: a = p[0]; r = p[1]; g = p[2]; b = p[3]; break;
+        case HLE_XFMT_R8G8B8A8: a = p[0]; b = p[1]; g = p[2]; r = p[3]; break;
+        case HLE_XFMT_R5G6B5:
+            r = (uint8_t)((v >> 11) * 255 / 31);
+            g = (uint8_t)((v >> 5 & 63) * 255 / 63);
+            b = (uint8_t)((v & 31) * 255 / 31);
+            break;
+        case HLE_XFMT_A1R5G5B5: case HLE_XFMT_X1R5G5B5:
+            r = (uint8_t)((v >> 10 & 31) * 255 / 31);
+            g = (uint8_t)((v >> 5 & 31) * 255 / 31);
+            b = (uint8_t)((v & 31) * 255 / 31);
+            a = d->fmt == HLE_XFMT_X1R5G5B5 || (v & 0x8000) ? 255 : 0;
+            break;
+        case HLE_XFMT_A4R4G4B4:
+            a = (uint8_t)((v >> 12) * 17);
+            r = (uint8_t)((v >> 8 & 15) * 17);
+            g = (uint8_t)((v >> 4 & 15) * 17);
+            b = (uint8_t)((v & 15) * 17);
+            break;
+        case HLE_XFMT_L8: r = g = b = p[0]; break;
+        case HLE_XFMT_AL8: r = g = b = a = p[0]; break;
+        case HLE_XFMT_A8: r = g = b = 255; a = p[0]; break;
+        case HLE_XFMT_A8L8: r = g = b = p[0]; a = p[1]; break;
+        default:
+            g_free(o);
+            return NULL;
+        }
+        o[i * 4] = r;
+        o[i * 4 + 1] = g;
+        o[i * 4 + 2] = b;
+        o[i * 4 + 3] = a;
+    }
+    return o;
+}
+
+/* An upscaler's picture against the game's own texture: it must be a whole number of times its size and,
+ * averaged back down, look like it in colour (where the texture isn't transparent; everywhere if nearly all of
+ * it is). A picture that fails (an upscaler's black or garbled output) is not used. The picture's alpha is not
+ * looked at: it is replaced (texpack_alpha). */
+static bool texpack_like(const uint8_t *px, uint32_t w, uint32_t h, const uint8_t *own, uint32_t ow, uint32_t oh,
+                         float *colour)
+{
+    *colour = -1.0f;                    /* not compared */
+    if (!ow || !oh || w % ow || h % oh || w / ow != h / oh) {
+        return false;
+    }
+    const uint32_t k = w / ow;
+    /* a grid of at most 64 x 64 of the texture's texels is enough to tell */
+    const uint32_t sx = MAX(ow / 64, 1u), sy = MAX(oh / 64, 1u);
+    double dc = 0.0, wc = 0.0, du = 0.0, n = 0.0;
+    for (uint32_t y = 0; y < oh; y += sy) {
+        for (uint32_t x = 0; x < ow; x += sx) {
+            uint32_t sum[3] = { 0 };
+            for (uint32_t j = 0; j < k; j++) {
+                const uint8_t *p = px + (((size_t)y * k + j) * w + (size_t)x * k) * 4;
+                for (uint32_t i = 0; i < k; i++, p += 4) {
+                    sum[0] += p[0];
+                    sum[1] += p[1];
+                    sum[2] += p[2];
+                }
+            }
+            const uint8_t *o = own + ((size_t)y * ow + x) * 4;
+            const double a = o[3] / 255.0, kk = (double)k * k;
+            const double e = (fabs(sum[0] / kk - o[0]) + fabs(sum[1] / kk - o[1]) + fabs(sum[2] / kk - o[2])) / 3.0;
+            dc += a * e;
+            wc += a;
+            du += e;
+            n += 1.0;
+        }
+    }
+    *colour = (float)(wc > 0.05 * n ? dc / wc : du / n);
+    return *colour < 28.0f;
+}
+
+/* The game's own alpha into the upscaler's picture (k times the size), read bilinearly. The upscaler is given
+ * colour alone: what it made of textures with an alpha channel came back wrong in alpha and often in colour (a
+ * log of 1.0.76.26: 180 of 193 pictures refused, nearly all of palettized or A8R8G8B8 textures). */
+static void texpack_alpha(uint8_t *px, uint32_t w, uint32_t h, const uint8_t *own, uint32_t ow, uint32_t oh)
+{
+    const float k = (float)w / (float)ow;
+    for (uint32_t y = 0; y < h; y++) {
+        const float fy = MAX(((float)y + 0.5f) / k - 0.5f, 0.0f);
+        const uint32_t y0 = MIN((uint32_t)fy, oh - 1), y1 = MIN(y0 + 1, oh - 1);
+        const float ty = fy - (float)y0;
+        for (uint32_t x = 0; x < w; x++) {
+            const float fx = MAX(((float)x + 0.5f) / k - 0.5f, 0.0f);
+            const uint32_t x0 = MIN((uint32_t)fx, ow - 1), x1 = MIN(x0 + 1, ow - 1);
+            const float tx = fx - (float)x0;
+            const float a = ((float)own[((size_t)y0 * ow + x0) * 4 + 3] * (1.0f - tx) +
+                             (float)own[((size_t)y0 * ow + x1) * 4 + 3] * tx) * (1.0f - ty) +
+                            ((float)own[((size_t)y1 * ow + x0) * 4 + 3] * (1.0f - tx) +
+                             (float)own[((size_t)y1 * ow + x1) * 4 + 3] * tx) * ty;
+            px[((size_t)y * w + x) * 4 + 3] = (uint8_t)(a + 0.5f);
+        }
+    }
+}
+
+/* A texture as a file on the disc holds it (an XPR container's resource: its header's words and its data, `avail`
+ * bytes of it), for the textures to be written out without the game loading them (native/app/texscan.c): the
+ * hash the game's own definition of it would get, and its largest level as R, G, B, A (g_free). False for
+ * what the game's definition wouldn't take either (hle_draw_tex_define's rules for a pack), a palettized
+ * texture (its palette is another resource, bound at run time) and data that isn't all there. */
+bool hle_draw_tex_scan(const uint32_t common, uint32_t format, uint32_t size, const uint8_t *data, size_t avail,
+                       uint64_t *hash, uint8_t **rgba, uint32_t *w, uint32_t *h)
+{
+    HleResDesc d;
+    HleResInfo ri;
+    if (!hle_res_from_header(common, format, size, &d) || !hle_res_info(&d, &ri)) {
+        return false;
+    }
+    const HleFmtInfo *fi = hle_fmt_info(d.fmt);
+    if (d.kind != HLE_RK_TEXTURE || !fi || (fi->flags & (HLE_FI_YUV | HLE_FI_DEPTH | HLE_FI_LIN)) ||
+        d.fmt == HLE_XFMT_P8 || d.w < 16 || d.h < 16 || d.w > 4096 || d.h > 4096 || !ri.bytes || ri.bytes > avail) {
+        return false;
+    }
+    const uint32_t levels = MAX(ri.levels, 1u);
+    uint32_t p0, p1;
+    const uint32_t o0 = hle_res_subresource(&d, 0, 0, &p0);
+    const uint32_t o1 = levels > 1 ? hle_res_subresource(&d, 0, 1, &p1) : ri.bytes;
+    if (o1 <= o0 || o1 > ri.bytes) {
+        return false;
+    }
+    uint8_t *px = tex_rgba(&d, fi, data, NULL);
+    if (!px) {
+        return false;
+    }
+    *hash = hle_texpack_hash(data + o0, o1 - o0, d.fmt, d.w, d.h, NULL, 0);
+    *rgba = px;
+    *w = d.w;
+    *h = d.h;
+    return true;
+}
+
+static bool g_pack_deferred, g_pack_pending;
+static uint64_t g_pack_pending_hash;
+
+bool hle_draw_tex_pack_pending(uint64_t *hash)
+{
+    const bool p = g_pack_pending;
+    g_pack_pending = false;
+    *hash = g_pack_pending_hash;
+    return p;
+}
+
+bool hle_draw_tex_pack_deferred(void)
+{
+    const bool d = g_pack_deferred;
+    g_pack_deferred = false;
+    return d;
+}
+
+/* The largest side a pack's picture goes up at (hle_host_texpack_cap: by the GPU's memory), 2048 at most. */
+static uint32_t texpack_cap(void)
+{
+    const int c = hle_host_texpack_cap();
+    return c >= 2048 ? 2048u : c >= 1024 ? 1024u : c >= 512 ? 512u : c > 0 ? 256u : 2048u;
+}
+
+/* The pack's picture for `hash` into the arena as object id's image, with its smaller levels made here when the
+ * game's texture has any (each the average of four texels of the one above). 1: done; 0: there is none (or it
+ * isn't usable); -1: there is one but no room for it now (hle_draw_tex_pack_deferred: asked again a frame
+ * later, the game's own meanwhile).
+ *
+ * Room: these pictures are megabytes, and the arena is a ring the draws' vertices and constants share. Waiting
+ * for room (ring_alloc) in the middle of a draw ends the submission that draw's own data was put in, and the
+ * next allocation may land on it: with pictures this size that happened at every other texture (the draws came
+ * out with other draws' data: black scenes, noise, a texture where another belongs). So a picture only goes up
+ * when it fits in what is free now, with a quarter of the arena left for the draws. */
+static int texpack_define(uint32_t id, uint64_t hash, bool mips, const HleResDesc *d, const HleFmtInfo *fi,
+                          const uint8_t *src, const uint32_t *pal)
+{
+    HleArena *a = &g_harena.alloc;
+    if (!hle_texpack_has(hash)) {
+        return 0;
+    }
+    const uint32_t cap = texpack_cap();
+    const uint32_t worst = cap * cap * 4 / 3 * 4 + (1u << 20);
+    hle_arena_retire(a, hle_tl_completed());
+    if (worst > a->size / 2 || hle_arena_used(a) + worst > a->size / 4 * 3) {
+        g_pack_deferred = worst <= a->size / 2;     /* an arena too small for it at all: never */
+        return g_pack_deferred ? -1 : 0;
+    }
+    uint32_t w = 0, h = 0;
+    bool made = false;
+    uint8_t *px = hle_texpack_load(hash, &w, &h, &made);
+    if (!px) {
+        return 0;
+    }
+    if (made) {
+        g_autofree uint8_t *own = tex_rgba(d, fi, src, pal);
+        float dc = -1.0f;
+        if (!own || !texpack_like(px, w, h, own, d->w, d->h, &dc)) {
+            hle_texpack_reject(hash, w, h, d->w, d->h, d->fmt, own != NULL, dc);
+            hle_texpack_free(px);
+            return 0;
+        }
+        texpack_alpha(px, w, h, own, d->w, d->h);
+    }
+    hle_texpack_used(hash, w, h, made);
+    /* its levels, each the average of four texels of the one above, on the heap (the arena's memory reads
+     * slowly); the first of at most `cap` a side is the one that goes up, with those under it if the game's
+     * texture has levels (an upscaler's 4x of a large texture is taken at half or a quarter) */
+    enum { MAXL = 14 };
+    uint8_t *lv[MAXL] = { px };
+    uint32_t lw[MAXL] = { w }, lh[MAXL] = { h };
+    unsigned n = 1, first = 0;
+    while (lw[first] > cap || lh[first] > cap || (mips && (lw[n - 1] > 1 || lh[n - 1] > 1))) {
+        if (n == MAXL) {
+            break;
+        }
+        const uint32_t pw = lw[n - 1], ph = lh[n - 1], cw = MAX(pw / 2, 1u), ch = MAX(ph / 2, 1u);
+        const uint8_t *prev = lv[n - 1];
+        uint8_t *cur = g_malloc((size_t)cw * ch * 4);
+        for (uint32_t y = 0; y < ch; y++) {
+            const uint32_t y0 = MIN(y * 2, ph - 1), y1 = MIN(y * 2 + 1, ph - 1);
+            for (uint32_t x = 0; x < cw; x++) {
+                const uint32_t x0 = MIN(x * 2, pw - 1), x1 = MIN(x * 2 + 1, pw - 1);
+                for (unsigned c = 0; c < 4; c++) {
+                    cur[((size_t)y * cw + x) * 4 + c] = (uint8_t)(
+                        (prev[((size_t)y0 * pw + x0) * 4 + c] + prev[((size_t)y0 * pw + x1) * 4 + c] +
+                         prev[((size_t)y1 * pw + x0) * 4 + c] + prev[((size_t)y1 * pw + x1) * 4 + c] + 2) / 4);
+                }
+            }
+        }
+        lv[n] = cur;
+        lw[n] = cw;
+        lh[n] = ch;
+        n++;
+        if (lw[first] > cap || lh[first] > cap) {
+            first = n - 1;
+        }
+    }
+    const uint32_t levels = mips ? n - first : 1;
+    uint32_t total = 0;
+    for (uint32_t l = 0; l < levels; l++) {
+        total += lw[first + l] * lh[first + l] * 4;
+    }
+    /* no waiting for room (see above): what is free now, or not this time */
+    uint32_t off = HLE_ARENA_FULL;
+    if (lw[first] <= cap && lh[first] <= cap && total <= worst) {
+        off = hle_arena_alloc(a, total, 16, hle_fe_last_value() + 1);
+    }
+    if (off != HLE_ARENA_FULL) {
+        uint8_t *dst = g_harena.map + off;
+        uint32_t pos = 0;
+        for (uint32_t l = 0; l < levels; l++) {
+            const uint32_t bytes = lw[first + l] * lh[first + l] * 4;
+            memcpy(dst + pos, lv[first + l], bytes);
+            pos += bytes;
+        }
+    }
+    w = lw[first];
+    h = lh[first];
+    for (unsigned i = 1; i < n; i++) {
+        g_free(lv[i]);
+    }
+    hle_texpack_free(px);
+    if (off == HLE_ARENA_FULL) {
+        g_pack_deferred = true;
+        return -1;
+    }
+    HleCmdTex *c = hle_fe_begin(HLE_OP_TEX, sizeof(*c));
+    c->id = id;
+    c->xfmt = HLE_XFMT_A8B8G8R8;        /* bytes R, G, B, A */
+    c->w = w;
+    c->h = h;
+    c->d = 1;
+    c->levels = levels;
+    c->faces = 1;
+    c->arena_off = off;
+    c->arena_len = total;
+    return 1;
+}
+
 /* The texels of texture d (header words h5; P8: palette pal, npal entries)
  * unswizzled or converted into the arena as object id's image (HLE_OP_TEX);
  * false if they can't be (format, memory, arena). */
@@ -365,6 +683,36 @@ static bool tex_define(uint32_t id, const uint32_t h5[5], const HleResDesc *dp,
         return false;                           /* more than any arena */
     }
     const uint32_t total = (uint32_t)total64;
+    /* Texture packs: a plain texture (not a cube, a volume, a linear or a signed one, 16 texels a side or more:
+     * an upscaler makes nothing of less) is known by a hash of its
+     * largest level as the game holds it; the pack's picture goes up in its place, or the game's own is written
+     * out for a pack to be made from. */
+    const int pack = hle_host_texpack();
+    if ((pack & 7) && !vol && faces == 1 && !h5[2] && !(fi->flags & HLE_FI_LIN) && d.w >= 16 && d.h >= 16) {
+        uint32_t p0, p1;
+        const uint32_t o0 = hle_res_subresource(&d, 0, 0, &p0);
+        const uint32_t o1 = levels > 1 ? hle_res_subresource(&d, 0, 1, &p1) : ri.bytes;
+        if (o1 > o0 && o1 <= ri.bytes) {
+            const uint64_t hash = hle_texpack_hash(src + o0, o1 - o0, d.fmt, d.w, d.h, p8 ? pal : NULL,
+                                                   p8 ? npal : 0);
+            const int got = (pack & 5) ? texpack_define(id, hash, levels > 1, &d, fi, src, pal) : 0;
+            if (got > 0) {
+                return true;
+            }
+            if ((pack & 6) && hle_texpack_dump_wanted(hash)) {
+                g_autofree uint8_t *rgba = tex_rgba(&d, fi, src, pal);
+                if (rgba) {
+                    hle_texpack_dump(hash, rgba, d.w, d.h);
+                    hle_texpack_note_dumped(hash);
+                }
+            }
+            /* no picture yet, and the upscaler runs beside the game: the draw code asks for it again */
+            if (!got && hle_texpack_awaited(hash)) {
+                g_pack_pending = true;
+                g_pack_pending_hash = hash;
+            }
+        }
+    }
     uint8_t *dst;
     uint32_t off = arena_alloc(total, 16, &dst);
     if (off == HLE_ARENA_FULL) {
