@@ -32,7 +32,7 @@ typedef struct In {
 enum Screen {
     SCR_MAIN, SCR_GAMES, SCR_GAME, SCR_GAME_SETTINGS, SCR_MODS, SCR_STATES, SCR_SETTINGS, SCR_CONTROLS,
     SCR_REMAP, SCR_MEMORY, SCR_MEMORY_TITLE, SCR_ONLINE, SCR_ABOUT, SCR_INGAME, SCR_INGAME_SLOTS, SCR_STICKS,
-    SCR_TRIGGERS, SCR_BROWSE, SCR_FIND, SCR_COUNT
+    SCR_TRIGGERS, SCR_BROWSE, SCR_FIND, SCR_COVER, SCR_COUNT
 };
 
 typedef struct Dash {
@@ -148,6 +148,18 @@ void dash_find_next_view(void);
 void dash_find_open(bool typing);
 void dash_find_clear(void);    /* no search, no filters */
 void scr_find(void);
+/* The on-screen keyboard (dash_find.c) at (x, y), keys of ks, typing into
+ * buf (cap) by the input given; true when Done is pressed. dash_text_type
+ * and dash_text_rub_out: a text field's typing and backspace. */
+bool dash_osk(float x, float y, float ks, const In *in, char *buf, size_t cap);
+void dash_text_type(char *buf, size_t cap, const char *s);
+void dash_text_rub_out(char *buf);
+/* The cover picker (dash_cover.c): box art to choose for g, by its name or
+ * a search, or a picture file of the user's (dash_cover_from_file, dash.c's
+ * file dialog, once the picker is closed). */
+void dash_cover_open(LibGame *g);
+void scr_cover(void);
+void dash_cover_from_file(void);
 /* The file browser (dash_browse.c), the dashboard's own for the gamepad,
  * the keyboard and the mouse: dash_browse_games adds folders and game
  * files to the library; dash_browse_file has one file chosen (exts:

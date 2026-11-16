@@ -1,5 +1,20 @@
 # xbased changelog
 
+## 1.1.5 (2026-11)
+
+### New
+- **Cover picker** (a game's Choose cover image): the box art that best
+  fits the game from libretro-thumbnails, with a preview of each one before
+  you pick it, a search to find another by name (keyboard or the on-screen
+  one) and, as before, a picture file of your own.
+
+### Fixes
+- AMD graphics: things drawn at the same depth as what's under them went
+  missing, such as Dead to Rights II's menu text.
+- Covers found automatically: the file's name decides between two
+  editions that share a title (Dead or Alive Ultimate's two discs), the
+  disc's own region comes first, and alphas, betas and demos come last.
+
 ## 1.1.4 (2026-11)
 
 ### Fixes

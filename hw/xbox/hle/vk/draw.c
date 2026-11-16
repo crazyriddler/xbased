@@ -6085,6 +6085,17 @@ void hle_draw_cmd_draw(const HleCmdDraw *c, VkCommandBuffer cb, uint32_t rt_id, 
             pc.mvp[k_carry[m]] = c->fog_carry[(m + 6 - vf % 6) % 6];
         }
     }
+    /* A 24-bit integer depth buffer on a device without D24S8 (AMD's: its
+     * image D32_SFLOAT_S8, surf.c): the pixel stage cuts the depth to the
+     * buffer's steps, as the integer buffer's own conversion does, every
+     * draw that tests it, fast precision too. A float image keeps the
+     * fraction of a step that sets two surfaces at the same depth apart,
+     * and the one drawn second over the other failed LESSEQUAL: Dead to
+     * Rights II's menu text over its backdrop, an RX 550 (#311). */
+    if (!g_hvk.caps.d24s8 && s->psh && ds && !wbuf && s->rs[RS_ZENABLE] == 1 &&
+        (ds->d.xfmt == HLE_XFMT_D24S8 || ds->d.xfmt == HLE_XFMT_LIN_D24S8)) {
+        k.pk.vol |= HLE_PSH_ZTRUNC;
+    }
     if (wbuf || (s->psh && ((k.pk.vol & HLE_PSH_ZTRUNC) || (k.pk.compare & HLE_PSH_ZFWORD)))) {
         /* (the truncated depth: the pixel stage adds the offsets itself, in
          * the buffer's steps and before the cut, as the console's words have

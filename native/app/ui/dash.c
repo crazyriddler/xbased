@@ -2155,6 +2155,11 @@ static void rename_row(List *l, LibGame *g)
     }
 }
 
+void dash_cover_from_file(void)
+{
+    dash_browse_file(T(S_CHOOSE_COVER), "png;jpg;jpeg", cover_file_cb, NULL);
+}
+
 static void scr_game(void)
 {
     LibGame *g = D.cur;
@@ -2216,7 +2221,7 @@ static void scr_game(void)
         lib_fetch_cover(g);
     }
     if (list_row(&l, T(S_CHOOSE_COVER), NULL, NULL)) {
-        dash_browse_file(T(S_CHOOSE_COVER), "png;jpg;jpeg", cover_file_cb, NULL);
+        dash_cover_open(g);
     }
     if (list_row(&l, T(g->fav ? S_REMOVE_FAV : S_ADD_FAV), NULL, NULL)) {
         lib_set_favorite(g, !g->fav);
@@ -2559,6 +2564,7 @@ int dash_run(SDL_Window *win, const char *exe)
         case SCR_ABOUT: scr_about(); break;
         case SCR_BROWSE: scr_browse(); break;
         case SCR_FIND: scr_find(); break;
+        case SCR_COVER: scr_cover(); break;
         default: break;
         }
         ui_layer_end();
