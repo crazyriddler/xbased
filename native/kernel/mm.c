@@ -802,6 +802,21 @@ static uint32_t contig_alloc(NcKernel *k, uint32_t size, uint32_t lo, uint32_t h
     if (pa == UINT32_MAX && g_ncontig < MAX_CONTIG && nc_vm_free_bytes(k->vm) >= size) {
         pa = nc_vm_alloc_phys_compact(k->vm, size, lo, hi, align, &moved);
     }
+    if (pa == UINT32_MAX && g_ncontig < MAX_CONTIG && nc_vm_free_bytes(k->vm) >= size) {
+        /* the last resort: pages whose address went out moved too (vm.h),
+         * and the file reads and writes in flight completed first, their
+         * buffers' pages locked meanwhile (io.c pin_buffer): Project Gotham
+         * Racing copies a city to its cache as it asks for the city's
+         * 22.6 MiB, the copy's buffers in the way (#239) */
+        pa = nc_vm_alloc_phys_compact_known(k->vm, size, lo, hi, align, &moved);
+        if (pa == UINT32_MAX && !nc_io_state_drain(k, 2000000000ull)) {
+            pa = nc_vm_alloc_phys_compact_known(k->vm, size, lo, hi, align, &moved);
+        }
+        if (pa != UINT32_MAX) {
+            nc_log("xbased-native", "mm: contiguous allocation of %u KiB at %08x only with pages whose address "
+                   "went out moved (%u pages relocated)", size >> 10, pa, moved);
+        }
+    }
     if (pa != UINT32_MAX && moved) {
         static unsigned s_moves;
         const unsigned n = ++s_moves;

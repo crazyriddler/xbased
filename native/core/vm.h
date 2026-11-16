@@ -155,6 +155,16 @@ void nc_vm_pin(NcVm *vm, uint32_t pa, bool known, int lock);
  * at one VA, not pinned) gets them moved to free pages elsewhere and is
  * returned. *moved: pages relocated. UINT32_MAX if no window can be freed. */
 uint32_t nc_vm_alloc_phys_compact(NcVm *vm, uint32_t len, uint32_t lo, uint32_t hi, uint32_t align, uint32_t *moved);
+/* The same with pages only known moved too (their address went out,
+ * MmGetPhysicalAddress, no lock on them): the console's kernel pins neither,
+ * and with them in the way the allocation fails, a crash for the title.
+ * The last resort, when nothing else gives the window (mm.c contig_alloc,
+ * after the file reads and writes in flight complete): Project Gotham
+ * Racing's 22.6 MiB as a New York race loads, 42.9 MiB free, pages of its
+ * buffers whose addresses it asked for strewn over the 40 MiB at the bottom
+ * of RAM (#239). They stay known. */
+uint32_t nc_vm_alloc_phys_compact_known(NcVm *vm, uint32_t len, uint32_t lo, uint32_t hi, uint32_t align,
+                                        uint32_t *moved);
 
 /* Contiguous physical pages as the Xbox kernel places them: the highest
  * window in [lo, hi) whose pages are free or can move, the ones that can

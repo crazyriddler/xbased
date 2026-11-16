@@ -1,5 +1,13 @@
 # xbased changelog
 
+## 1.1.8 (2026-11)
+
+### Fixes
+- Project Gotham Racing: the game froze on the loading screen of a New York
+  quick race. It asks for a 22.6 MiB block there, and with enough
+  memory free it was split by pages xbased never moved. They now move when
+  nothing else makes room, once the file copies in progress are done.
+
 ## 1.1.7 (2026-11)
 
 ### Fixes

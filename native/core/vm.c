@@ -620,6 +620,8 @@ static bool relocate(NcVm *vm, uint32_t q, uint32_t to)
     }
     vm->rmap[q] = 0;
     vm->page_used[q] = 0;
+    vm->pin[to] = vm->pin[q];   /* (a page whose address went out stays known where it goes: compact_known) */
+    vm->pin[q] = 0;
     if (tracked && nc_vm_dma.wrote) {
         nc_vm_dma.wrote(q * NC_PAGE, NC_PAGE);
         nc_vm_dma.wrote(to * NC_PAGE, NC_PAGE);
@@ -627,7 +629,31 @@ static bool relocate(NcVm *vm, uint32_t q, uint32_t to)
     return true;
 }
 
+/* movable, or only known (its address went out, no lock on it): the last
+ * resort's (nc_vm_alloc_phys_compact_known) */
+static bool movable_known(const NcVm *vm, uint32_t p)
+{
+    const uint32_t va = vm->rmap[p];
+    return va && (!vm->pin[p] || vm->pin[p] == NC_PIN_KNOWN) && !(g_na && g_na[p]) &&
+           vm->pte[va / NC_PAGE] == ((p * NC_PAGE) | NC_PTE_VALID);
+}
+
+static uint32_t compact(NcVm *vm, uint32_t len, uint32_t lo, uint32_t hi, uint32_t align, uint32_t *moved,
+                        bool known_too);
+
 uint32_t nc_vm_alloc_phys_compact(NcVm *vm, uint32_t len, uint32_t lo, uint32_t hi, uint32_t align, uint32_t *moved)
+{
+    return compact(vm, len, lo, hi, align, moved, false);
+}
+
+uint32_t nc_vm_alloc_phys_compact_known(NcVm *vm, uint32_t len, uint32_t lo, uint32_t hi, uint32_t align,
+                                        uint32_t *moved)
+{
+    return compact(vm, len, lo, hi, align, moved, true);
+}
+
+static uint32_t compact(NcVm *vm, uint32_t len, uint32_t lo, uint32_t hi, uint32_t align, uint32_t *moved,
+                        bool known_too)
 {
     *moved = 0;
     if (len > vm->ram_size) {
@@ -649,7 +675,7 @@ uint32_t nc_vm_alloc_phys_compact(NcVm *vm, uint32_t len, uint32_t lo, uint32_t 
         for (uint32_t i = 0; i < pages && ok; i++) {
             const uint32_t p = (uint32_t)s + i;
             if (vm->page_used[p]) {
-                ok = movable(vm, p);
+                ok = known_too ? movable_known(vm, p) : movable(vm, p);
                 used++;
             }
         }
