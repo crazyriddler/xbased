@@ -354,6 +354,17 @@ static int hkpad_code(const char *v)
     return IM_HKP_NONE;
 }
 
+/* a stick's inverted axes (stick.linvert, stick.rinvert: off, y, x, xy),
+ * the game's over the global one: 1 X, 2 Y */
+static uint8_t invert_bits(const Config *game, const Config *global, const char *key)
+{
+    const char *v = game && cfg_get(game, key) ? cfg_get(game, key) : cfg_get(global, key);
+    if (!v) {
+        return 0;
+    }
+    return (strchr(v, 'x') ? 1 : 0) | (strchr(v, 'y') ? 2 : 0);
+}
+
 void im_resolve(ImMap *m, const Config *global, const Config *game)
 {
     memset(m, 0, sizeof(*m));
@@ -383,6 +394,8 @@ void im_resolve(ImMap *m, const Config *global, const Config *game)
     const Config *ss = game && cfg_get(game, "stick.shape") ? game : global;
     const char *shape = cfg_get(ss, "stick.shape");
     m->stick_round = shape && !strcmp(shape, "round");
+    m->linvert = invert_bits(game, global, "stick.linvert");
+    m->rinvert = invert_bits(game, global, "stick.rinvert");
     const Config *td = game && cfg_get(game, "trigger.deadzone") ? game : global;
     m->trigger_dz = cfg_int(td, "trigger.deadzone", 10) / 100.0f;
     const Config *tf = game && cfg_get(game, "trigger.full") ? game : global;
@@ -471,12 +484,13 @@ float im_trigger(float a, float dz, float full)
     return (a - dz) / (full - dz);
 }
 
-static void stick(const ImMap *m, float xpos, float xneg, float ypos, float yneg, int16_t *ox, int16_t *oy)
+static void stick(const ImMap *m, float xpos, float xneg, float ypos, float yneg, uint8_t inv, int16_t *ox,
+                  int16_t *oy)
 {
     float x, y;
     im_stick(xpos - xneg, ypos - yneg, m->deadzone, m->stick_antidz, m->stick_range, m->stick_round, &x, &y);
-    *ox = (int16_t)(x * 32767);
-    *oy = (int16_t)(y * 32767);
+    *ox = (int16_t)((inv & 1 ? -x : x) * 32767);
+    *oy = (int16_t)((inv & 2 ? -y : y) * 32767);
 }
 
 void im_read(const ImMap *m, int p, const bool *keys, SDL_Gamepad *pad, ImPad *out)
@@ -511,6 +525,6 @@ void im_read(const ImMap *m, int p, const bool *keys, SDL_Gamepad *pad, ImPad *o
         }
         out->analog[i] = (uint8_t)(a >= 1 ? 255 : a <= 0.1f ? 0 : a * 255);
     }
-    stick(m, v[IM_LRIGHT], v[IM_LLEFT], v[IM_LUP], v[IM_LDOWN], &out->lx, &out->ly);
-    stick(m, v[IM_RRIGHT], v[IM_RLEFT], v[IM_RUP], v[IM_RDOWN], &out->rx, &out->ry);
+    stick(m, v[IM_LRIGHT], v[IM_LLEFT], v[IM_LUP], v[IM_LDOWN], m->linvert, &out->lx, &out->ly);
+    stick(m, v[IM_RRIGHT], v[IM_RLEFT], v[IM_RUP], v[IM_RDOWN], m->rinvert, &out->rx, &out->ry);
 }

@@ -59,6 +59,11 @@ bool hle_gpl_on(void)
         const char *e = getenv("XBASED_HLE_GPL");
         bool on = g_hvk.caps.gpl && g_hvk.caps.vids && g_hvk.caps.eds1 && g_hvk.caps.eds2 &&
                   !(e && *e && atoi(e) == 0);
+        char why[200];
+        if (on && hle_precision_gpl_blocked(why, sizeof(why))) {
+            hle_log("xbased-hle-pipe", "pipelines linked from libraries: off for this GPU and driver (%s)", why);
+            on = false;
+        }
         if (on) {
             /* a link that would compile (no fast linking) is no gain */
             VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT gp = {
@@ -345,7 +350,9 @@ HlePbResult hle_gpl_build(const HleGplDesc *d, bool cache_only, bool side, VkPip
             .flags = cache_only ? VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT : 0,
             .layout = d->layout };
         hle_precision_build_enter();
+        hle_precision_link_enter();
         const VkResult vr = T.vkCreateGraphicsPipelines(g_hvk.dev, hle_pcache_get(), 1, &link, NULL, out);
+        hle_precision_link_leave();
         hle_precision_build_leave();
         r = vr == VK_SUCCESS ? HLE_PB_OK : vr == VK_PIPELINE_COMPILE_REQUIRED ? HLE_PB_COMPILE : HLE_PB_FAILED;
         if (r != HLE_PB_OK) {

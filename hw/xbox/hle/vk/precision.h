@@ -55,5 +55,13 @@ void hle_precision_build_leave(void);
 /* The crash handler's: if the crashing thread was in a driver build, this
  * GPU and driver go fast from the next run (auto). */
 void hle_precision_crashed(void);
+/* The same around the link of a pipeline from its libraries' parts
+ * (gpl.c): a driver crash there turns the libraries off for this GPU and
+ * driver from the next run (AMD's Windows driver 26.11 on RDNA 2 crashed
+ * linking them, any precision, #325); hle_precision_gpl_blocked: that
+ * verdict, its reason in why. */
+void hle_precision_link_enter(void);
+void hle_precision_link_leave(void);
+bool hle_precision_gpl_blocked(char *why, size_t wn);
 
 #endif

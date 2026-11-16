@@ -17,6 +17,7 @@ static bool g_measuring;
 static char g_id[96];               /* "vendor:device:driver" of the GPU, its verdicts' key */
 static char g_path[320];            /* <base>/gpu_precision.txt */
 static __thread int t_building;     /* in a driver call that compiles */
+static __thread int t_linking;      /* in one from pipeline libraries (gpl.c) */
 static HleMutex g_b_mu;             /* the exact builds' measure (made in hle_precision_init, before any worker) */
 
 /* the measurement: busy GPU time in whole seconds of wall time */
@@ -46,7 +47,7 @@ bool hle_precision_measuring(void)
 
 /* The line of this GPU and driver in the verdicts' file: its verdict and
  * reason (false: none). */
-static bool verdict_read(char *verdict, size_t vn, char *reason, size_t rn)
+static bool verdict_read_id(const char *id, char *verdict, size_t vn, char *reason, size_t rn)
 {
     FILE *f = fopen(g_path, "r");
     if (!f) {
@@ -56,8 +57,8 @@ static bool verdict_read(char *verdict, size_t vn, char *reason, size_t rn)
     bool got = false;
     while (fgets(line, sizeof(line), f)) {
         line[strcspn(line, "\r\n")] = 0;
-        const size_t il = strlen(g_id);
-        if (strncmp(line, g_id, il) || line[il] != ' ') {
+        const size_t il = strlen(id);
+        if (strncmp(line, id, il) || line[il] != ' ') {
             continue;
         }
         const char *v = line + il + 1;
@@ -70,17 +71,23 @@ static bool verdict_read(char *verdict, size_t vn, char *reason, size_t rn)
     return got;
 }
 
-/* This GPU and driver's verdict, kept: the file's other lines, then this one. */
-static void verdict_write(const char *verdict, const char *reason)
+static bool verdict_read(char *verdict, size_t vn, char *reason, size_t rn)
+{
+    return verdict_read_id(g_id, verdict, vn, reason, rn);
+}
+
+/* This GPU and driver's verdict, kept: the file's other lines, then this one
+ * (id: g_id, or g_id + "/gpl" for the pipeline libraries' own). */
+static void verdict_write_id(const char *id, const char *verdict, const char *reason)
 {
     char *keep = NULL;
     size_t kn = 0;
     FILE *f = fopen(g_path, "r");
     if (f) {
         char line[512];
-        const size_t il = strlen(g_id);
+        const size_t il = strlen(id);
         while (fgets(line, sizeof(line), f)) {
-            if (!strncmp(line, g_id, il) && line[il] == ' ') {
+            if (!strncmp(line, id, il) && line[il] == ' ') {
                 continue;
             }
             const size_t l = strlen(line);
@@ -99,10 +106,20 @@ static void verdict_write(const char *verdict, const char *reason)
         if (keep) {
             fputs(keep, f);
         }
-        fprintf(f, "%s %s %s\n", g_id, verdict, reason);
+        fprintf(f, "%s %s %s\n", id, verdict, reason);
         fclose(f);
     }
     free(keep);
+}
+
+static void verdict_write(const char *verdict, const char *reason)
+{
+    verdict_write_id(g_id, verdict, reason);
+}
+
+static void gpl_id(char *out, size_t n)
+{
+    snprintf(out, n, "%s/gpl", g_id);
 }
 
 /* AMD's proprietary driver on GCN (Polaris, Vega): the Windows driver branch
@@ -259,8 +276,34 @@ void hle_precision_build_leave(void)
     t_building--;
 }
 
+void hle_precision_link_enter(void)
+{
+    t_linking++;
+}
+
+void hle_precision_link_leave(void)
+{
+    t_linking--;
+}
+
+bool hle_precision_gpl_blocked(char *why, size_t wn)
+{
+    char id[128], v[32];
+    gpl_id(id, sizeof(id));
+    return g_path[0] && verdict_read_id(id, v, sizeof(v), why, wn) && !strcmp(v, "off");
+}
+
 void hle_precision_crashed(void)
 {
+    if (t_linking > 0 && g_path[0]) {
+        /* in the libraries' link: whole pipelines from the next run, the
+         * precision as it was (a link compiles none of the shaders anew; it
+         * crashed on fast too) */
+        char id[128];
+        gpl_id(id, sizeof(id));
+        verdict_write_id(id, "off", "the driver crashed linking a shader from its parts in an earlier run");
+        return;
+    }
     if (t_building <= 0 || !g_path[0] || g_option != HLE_PREC_AUTO || g_fast) {
         return;
     }

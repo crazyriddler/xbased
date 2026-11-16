@@ -6,6 +6,7 @@
 #include "native/app/ui/dash.h"
 #include "native/app/ui/console_cfg.h"
 #include "native/app/ui/dash_int.h"
+#include "native/app/ui/pointer.h"
 #include "native/app/ui/shortcut.h"
 #include "native/app/ui/sound.h"
 #include "native/app/ui/update.h"
@@ -33,10 +34,16 @@ void dash_set_fullscreen_hook(void (*toggle)(void))
 }
 
 static bool (*g_ptr_hook)(float *x, float *y);
+static void (*g_pump_hook)(void);
 
 void dash_set_pointer_hook(bool (*where)(float *x, float *y))
 {
     g_ptr_hook = where;
+}
+
+void dash_set_pump_hook(void (*pump)(void))
+{
+    g_pump_hook = pump;
 }
 static UiTex *g_layer, *g_prev;   /* this screen's foreground, the last one's */
 static float g_trans = 1;               /* the transition's progress, 0-1 */
@@ -293,6 +300,9 @@ static void poll_input(void)
     memset(in, 0, sizeof(*in));
     in->pad = pad;
     in->pad_button = -1;
+    if (g_pump_hook) {
+        g_pump_hook();  /* the session frame's mouse, as this window's events (win_main.c) */
+    }
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         switch (e.type) {
@@ -671,7 +681,7 @@ static void auto_shot(void)
 /* ------------------------------------------------------------ drawing helpers */
 
 static const char *const k_key[6] = {"Enter", "Esc", "Del", "Tab", "Z / C", "V"};
-static const char *const k_pad_wide[6] = {NULL, NULL, NULL, NULL, "LT / RT", "View"};
+static const char *const k_pad_wide[6] = {NULL, NULL, NULL, NULL, "LT / RT", "Back"};  /* the original controller's name for it (#322) */
 
 void draw_button_glyph(float x, float y, int which, float size)
 {
@@ -679,7 +689,7 @@ void draw_button_glyph(float x, float y, int which, float size)
                                      {0x30, 0x7C, 0xE8, 0xFF}, {0xF0, 0xC0, 0x20, 0xFF}};
     static const char *const k_pad[4] = {"A", "B", "X", "Y"};
     if (D.in.pad && which >= 4) {
-        /* the triggers, the View button: their names on a dark key */
+        /* the triggers, the Back button: their names on a dark key */
         const float w = ui_text_width(k_pad_wide[which], size * 0.56f, UI_FONT_BOLD) + size * 0.7f;
         ui_round(x, y + size * 0.08f, w, size * 0.84f, size * 0.42f, ui_alpha((UiColor){0x30, 0x34, 0x30, 0xFF}, 0.95f));
         ui_text(x + w / 2, y + size * 0.19f, k_pad_wide[which], size * 0.56f, UI_FONT_BOLD, UI_WHITE, UI_ALIGN_CENTER);
@@ -2420,6 +2430,7 @@ int dash_run(SDL_Window *win, const char *exe)
 {
     memset(&D, 0, sizeof(D));
     g_win = win;
+    ptr_install(win);   /* xbased's pointer (pointer.h) */
     SDL_HideCursor();   /* it shows when the mouse moves (poll_input) */
     g_cursor_at = 0;
     snprintf(D.exe, sizeof(D.exe), "%s", exe);
@@ -2777,6 +2788,7 @@ int dash_ingame(SDL_Window *win, const char *key, const char *title, const char 
     memset(&D, 0, sizeof(D));
     g_game_running = true;
     g_win = win;
+    ptr_install(win);   /* xbased's pointer (pointer.h) */
     SDL_HideCursor();   /* it shows when the mouse moves (poll_input) */
     g_cursor_at = 0;
     char p[1200];

@@ -49,6 +49,11 @@ const char *cfg_data_dir(void);
  * command line named (-c, --config: XBASED_CONFIG, which the game's process
  * and the runs after it inherit). */
 const char *cfg_global_path(void);
+/* The hard disk's cache partitions (X, Y and Z: Partition3 to 5 and their
+ * heads, raw-partition3 to 5.bin) emptied, as a console's cache cleared:
+ * the titles copy their files from the disc there again (#308). hdd: the
+ * hard disk's folder, NULL the data folder's. The files removed, or -1. */
+int cfg_clear_game_cache(const char *hdd);
 /* Beside the executable (fonts, mods). */
 const char *cfg_exe_dir(void);
 /* Runs a helper program (curl, tar) to its end, with no window of its own

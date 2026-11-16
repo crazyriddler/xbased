@@ -4,9 +4,11 @@
 #include "native/app/ui/config.h"
 
 #include <SDL3/SDL.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -269,6 +271,62 @@ const char *cfg_global_path(void)
     static char p[1100];
     snprintf(p, sizeof(p), "%sxbased.ini", cfg_data_dir());
     return p;
+}
+
+/* a folder's contents removed, the folder kept; the files removed */
+static int rm_inside(const char *dir)
+{
+    DIR *d = opendir(dir);
+    if (!d) {
+        return 0;
+    }
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) {
+            continue;
+        }
+        char p[1400];
+        snprintf(p, sizeof(p), "%s/%s", dir, e->d_name);
+        struct stat st;
+        if (stat(p, &st) != 0) {
+            continue;
+        }
+        if (S_ISDIR(st.st_mode)) {
+            n += rm_inside(p);
+            rmdir(p);
+        } else if (remove(p) == 0) {
+            n++;
+        }
+    }
+    closedir(d);
+    return n;
+}
+
+int cfg_clear_game_cache(const char *hdd)
+{
+    char root[1100];
+    if (hdd && hdd[0]) {
+        snprintf(root, sizeof(root), "%s", hdd);
+    } else {
+        snprintf(root, sizeof(root), "%shdd", cfg_data_dir());
+    }
+    struct stat st;
+    if (stat(root, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        return -1;
+    }
+    int n = 0;
+    for (int p = 3; p <= 5; p++) {
+        char path[1200];
+        snprintf(path, sizeof(path), "%s/Partition%d", root, p);
+        n += rm_inside(path);
+        /* its FATX head: zeros read back, the title formats it anew */
+        snprintf(path, sizeof(path), "%s/raw-partition%d.bin", root, p);
+        if (remove(path) == 0) {
+            n++;
+        }
+    }
+    return n;
 }
 
 const char *cfg_data_dir(void)

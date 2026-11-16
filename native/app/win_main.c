@@ -32,6 +32,7 @@
 #include "native/app/ui/dash.h"
 #include "native/app/ui/i18n.h"
 #include "native/app/ui/input_map.h"
+#include "native/app/ui/pointer.h"
 #include "native/app/ui/ui.h"
 #include "hw/xbox/hle/vk/swapchain.h"
 #include "hw/xbox/hle/vk/share.h"
@@ -887,6 +888,85 @@ static bool frame_pointer(float *x, float *y)
     return true;
 }
 
+/* The frame's mouse, as this window's events (the in-game menu's and the
+ * game's pointer), and whether the pointer is wanted told back. From the
+ * main loop and the in-game menu's (dash_set_pump_hook): the menu's loop
+ * had no mouse in the frame, the pointer never showed there (#323). The
+ * first position isn't a move (the window come up under the pointer). */
+static SDL_Window *g_pump_win;
+
+static void frame_mouse_pump(void)
+{
+    if (!g_frame || !g_frame_hidden || !g_pump_win || !hle_present_remote()) {
+        return;
+    }
+    HleShareMouse ms[32];
+    static int64_t at;
+    const uint32_t n = hle_present_remote_mouse(ms, 32, &at);
+    for (uint32_t k = 0; k < n; k++) {
+        SDL_Event e;
+        SDL_zero(e);
+        if (ms[k].type == 1) {
+            e.type = SDL_EVENT_MOUSE_MOTION;
+            e.motion.windowID = SDL_GetWindowID(g_pump_win);
+            e.motion.x = (float)ms[k].x;
+            e.motion.y = (float)ms[k].y;
+            e.motion.xrel = g_frame_mx < 0 ? 0.0f : (float)ms[k].x - g_frame_mx;
+            e.motion.yrel = g_frame_my < 0 ? 0.0f : (float)ms[k].y - g_frame_my;
+            g_frame_mx = (float)ms[k].x;
+            g_frame_my = (float)ms[k].y;
+        } else if (ms[k].type == 2 || ms[k].type == 3) {
+            e.type = ms[k].type == 2 ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
+            e.button.windowID = SDL_GetWindowID(g_pump_win);
+            e.button.button = (Uint8)ms[k].button;
+            e.button.down = ms[k].type == 2;
+            e.button.clicks = 1;
+            e.button.x = (float)ms[k].x;
+            e.button.y = (float)ms[k].y;
+        } else {
+            e.type = SDL_EVENT_MOUSE_WHEEL;
+            e.wheel.windowID = SDL_GetWindowID(g_pump_win);
+            e.wheel.y = (float)ms[k].wheel;
+        }
+        SDL_PushEvent(&e);
+    }
+    hle_present_remote_cursor(SDL_CursorVisible());
+}
+
+/* The pointer over the game: hidden, shown as the mouse moves (2 pixels in
+ * all) or clicks, hidden again after 3 still seconds, as the dashboard's */
+static double g_play_ptr_at;    /* when it showed; 0 hidden */
+static float g_play_moved;
+
+static void play_pointer(float moved)
+{
+    g_play_moved += moved;
+    if (g_play_moved < 2) {
+        return;
+    }
+    g_play_moved = 0;
+    if (g_play_ptr_at <= 0) {
+        SDL_ShowCursor();
+    }
+    g_play_ptr_at = SDL_GetTicks() / 1000.0;
+}
+
+static void play_pointer_tick(void)
+{
+    if (g_play_ptr_at > 0 && SDL_GetTicks() / 1000.0 - g_play_ptr_at > 3) {
+        SDL_HideCursor();
+        g_play_ptr_at = 0;
+        g_play_moved = 0;
+    }
+}
+
+static void play_pointer_off(void)
+{
+    SDL_HideCursor();
+    g_play_ptr_at = 0;
+    g_play_moved = 0;
+}
+
 static bool ov_ok(void)
 {
     return ui_is_overlay() && hle_ov_ready();
@@ -1170,7 +1250,7 @@ static void ingame_menu(SDL_Window *win, bool *paused, bool minimized)
         g_ov_up = false;
         g_notice[0] = 0;
         const int act = dash_ingame(win, g_key, title ? title + 1 : g_disc, NULL, &slot, live_cfg);
-        SDL_HideCursor();
+        play_pointer_off();
         nc_auto_resync();
         if (act == DASH_INGAME_QUIT) {
             fx_out();
@@ -1214,7 +1294,7 @@ static void ingame_menu(SDL_Window *win, bool *paused, bool minimized)
     if (act == DASH_INGAME_QUIT) {
         quit_to_dash(win);
     }
-    SDL_HideCursor();   /* the game doesn't use the mouse; the menu may have shown it */
+    play_pointer_off();   /* the game doesn't use the mouse; the menu may have shown it */
     nc_auto_resync();
     /* the presenter back on the window before anything is shown or saved */
     SDL_Delay(50);
@@ -1753,6 +1833,16 @@ int main(int argc, char *argv[])
         snprintf(hdd, sizeof(hdd), "%shdd", g_data_dir);
     }
     make_hdd(hdd);
+    {
+        /* cache.clear=1: the cache partitions emptied before each game, as
+         * a console's cache cleared (the game's files from the disc again,
+         * not an older copy; #308) */
+        const char *cc = opt_value("cache.clear");
+        if (cc && strcmp(cc, "0")) {
+            const int n = cfg_clear_game_cache(hdd);
+            nc_log("xbased-app", "game cache (partitions 3 to 5) cleared: %d file(s) removed", n < 0 ? 0 : n);
+        }
+    }
     if (g_title_id) {
         /* downloaded content and title updates copied in by hand: signed for this console */
         const int resigned = xi_resign_downloads(hdd, g_title_id);
@@ -1901,6 +1991,8 @@ int main(int argc, char *argv[])
             if (g_frame_hidden) {
                 hle_present_set_remote(tok);
                 dash_set_pointer_hook(frame_pointer);
+                dash_set_pump_hook(frame_mouse_pump);
+                g_pump_win = win;
             }
             nc_frame_adopt(g_frame, win, wtitle, g_frame_hidden);
             dash_set_fullscreen_hook(frame_fullscreen);
@@ -1922,7 +2014,8 @@ int main(int argc, char *argv[])
         }
         SDL_ShowWindow(win);
     }
-    SDL_HideCursor();   /* the game doesn't use the mouse */
+    ptr_install(win);   /* xbased's pointer (pointer.h) */
+    SDL_HideCursor();   /* the game doesn't use the mouse; it shows as the mouse moves (play_pointer) */
     SDL_PropertiesID props = SDL_GetWindowProperties(win);
     g_nw.hwnd = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_HWND_POINTER, NULL);
     g_nw.hinstance = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WIN32_INSTANCE_POINTER, NULL);
@@ -2119,10 +2212,17 @@ int main(int argc, char *argv[])
                     nc_audio_set_volume(0);
                 }
                 break;
+            case SDL_EVENT_MOUSE_MOTION:
+                play_pointer(fabsf(ev.motion.xrel) + fabsf(ev.motion.yrel));
+                break;
+            case SDL_EVENT_MOUSE_BUTTON_DOWN:
+                play_pointer(2);
+                break;
             default:
                 break;
             }
         }
+        play_pointer_tick();
         nc_auto_tick();
         if (nc_auto_take_menu()) {
             ingame_menu(win, &paused, minimized);
@@ -2178,39 +2278,8 @@ int main(int argc, char *argv[])
                 g_frame_hidden = false;     /* no shared pictures: the window fills the frame, as before */
                 nc_frame_fill(g_frame, win);
                 nc_log("xbased-app", "window: the frame's pictures can't be had: drawn in the window");
-            } else if (hle_present_remote()) {
-                /* the frame's mouse, as this window's (the in-game menu's pointer) */
-                HleShareMouse ms[32];
-                static int64_t at;
-                const uint32_t n = hle_present_remote_mouse(ms, 32, &at);
-                for (uint32_t k = 0; k < n; k++) {
-                    SDL_Event e;
-                    SDL_zero(e);
-                    if (ms[k].type == 1) {
-                        e.type = SDL_EVENT_MOUSE_MOTION;
-                        e.motion.windowID = SDL_GetWindowID(win);
-                        e.motion.x = (float)ms[k].x;
-                        e.motion.y = (float)ms[k].y;
-                        e.motion.xrel = g_frame_mx < 0 ? 4.0f : (float)ms[k].x - g_frame_mx;
-                        e.motion.yrel = g_frame_my < 0 ? 4.0f : (float)ms[k].y - g_frame_my;
-                        g_frame_mx = (float)ms[k].x;
-                        g_frame_my = (float)ms[k].y;
-                    } else if (ms[k].type == 2 || ms[k].type == 3) {
-                        e.type = ms[k].type == 2 ? SDL_EVENT_MOUSE_BUTTON_DOWN : SDL_EVENT_MOUSE_BUTTON_UP;
-                        e.button.windowID = SDL_GetWindowID(win);
-                        e.button.button = (Uint8)ms[k].button;
-                        e.button.down = ms[k].type == 2;
-                        e.button.clicks = 1;
-                        e.button.x = (float)ms[k].x;
-                        e.button.y = (float)ms[k].y;
-                    } else {
-                        e.type = SDL_EVENT_MOUSE_WHEEL;
-                        e.wheel.windowID = SDL_GetWindowID(win);
-                        e.wheel.y = (float)ms[k].wheel;
-                    }
-                    SDL_PushEvent(&e);
-                }
-                hle_present_remote_cursor(SDL_CursorVisible());
+            } else {
+                frame_mouse_pump();
             }
         }
         static bool raised;

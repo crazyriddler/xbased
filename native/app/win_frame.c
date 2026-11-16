@@ -18,6 +18,7 @@
 #include <dxgi1_5.h>
 #include "hw/xbox/hle/vk/share.h"
 #include "native/app/ui/config.h"    /* cfg_data_dir */
+#include "native/app/ui/pointer.h"   /* xbased's pointer */
 
 #define WM_FRAME_TOGGLE (WM_APP + 1)
 #define WM_FRAME_CLOSE  (WM_APP + 2)
@@ -957,6 +958,59 @@ static void hand_back(void)
  * pointer is over the window (g_cursor_set: the last one set, -1 none). */
 static int g_cursor_set = -1;
 
+/* xbased's pointer (pointer.h) as a cursor, at the window's scale; the
+ * system's arrow if it can't be made */
+static HCURSOR arrow(void)
+{
+    static HCURSOR c;
+    if (c) {
+        return c;
+    }
+    const UINT dpi = g_fw ? GetDpiForWindow(g_fw) : 0;
+    const float s = dpi ? dpi / 96.0f : 1.0f;
+    const int n = ptr_art_size(s), row = (n + 15) / 16 * 2;
+    uint32_t *px = malloc((size_t)n * n * sizeof(uint32_t));
+    uint8_t *mbits = calloc((size_t)row * n, 1);
+    if (px && mbits) {
+        int size = 0, hot = 0;
+        ptr_art(s, px, &size, &hot);
+        BITMAPV5HEADER bi;
+        memset(&bi, 0, sizeof(bi));
+        bi.bV5Size = sizeof(bi);
+        bi.bV5Width = size;
+        bi.bV5Height = -size;   /* top row first */
+        bi.bV5Planes = 1;
+        bi.bV5BitCount = 32;
+        bi.bV5Compression = BI_BITFIELDS;
+        bi.bV5RedMask = 0x00FF0000;
+        bi.bV5GreenMask = 0x0000FF00;
+        bi.bV5BlueMask = 0x000000FF;
+        bi.bV5AlphaMask = 0xFF000000;
+        void *bits = NULL;
+        HDC dc = GetDC(NULL);
+        HBITMAP col = CreateDIBSection(dc, (BITMAPINFO *)&bi, DIB_RGB_COLORS, &bits, NULL, 0);
+        ReleaseDC(NULL, dc);
+        HBITMAP mask = CreateBitmap(size, size, 1, 1, mbits);
+        if (col && bits && mask) {
+            memcpy(bits, px, (size_t)size * size * sizeof(uint32_t));
+            ICONINFO ii = {FALSE, (DWORD)hot, (DWORD)hot, mask, col};
+            c = (HCURSOR)CreateIconIndirect(&ii);
+        }
+        if (col) {
+            DeleteObject(col);
+        }
+        if (mask) {
+            DeleteObject(mask);
+        }
+    }
+    free(px);
+    free(mbits);
+    if (!c) {
+        c = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+    }
+    return c;
+}
+
 static int cursor_want(void)
 {
     return !g_presenting || (g_sh && g_sh->cursor);
@@ -970,7 +1024,7 @@ static void cursor_sync(void)
         SendMessageW(g_fw, WM_NCHITTEST, 0, MAKELPARAM(pt.x, pt.y)) != HTCLIENT) {
         return;
     }
-    SetCursor(want ? LoadCursorW(NULL, (LPCWSTR)IDC_ARROW) : NULL);
+    SetCursor(want ? arrow() : NULL);
     g_cursor_set = want;
 }
 
@@ -1006,7 +1060,7 @@ static LRESULT CALLBACK frame_proc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_SETCURSOR:
         if (LOWORD(l) == HTCLIENT) {
             g_cursor_set = cursor_want();
-            SetCursor(g_cursor_set ? LoadCursorW(NULL, (LPCWSTR)IDC_ARROW) : NULL);
+            SetCursor(g_cursor_set ? arrow() : NULL);
             return TRUE;
         }
         g_cursor_set = -1;      /* over the frame's edges */

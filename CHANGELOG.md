@@ -1,5 +1,33 @@
 # xbased changelog
 
+## 1.1.6 (2026-11)
+
+### New
+- **Invert the sticks** (Settings > Controls, and per game in its Controls
+  screen): the right or the left stick turned over vertically,
+  horizontally or both, for games with a camera that turns the other way
+  and no option of their own (Jaws, Red Ninja).
+- **xbased's own pointer**: a bigger green pointer in the dashboard's style,
+  sharp at any display scale, on the dashboard, the in-game menu and over
+  the game.
+- **Clear the game cache** (Settings > System, and per game): off by
+  default. Games copy files from the disc to the cache partitions (X, Y and
+  Z) and keep using that copy, so a translated or modded file could go on
+  showing the old one. It can clear them before each start or once now.
+  Saves aren't touched.
+- With a gamepad, the Settings tabs show LB and RB at their ends (they
+  switch tabs), and the Back button is called Back as on the original
+  controller.
+
+### Fixes
+- The mouse in games: the pointer never showed in the in-game menu and its
+  options couldn't be clicked. It now shows as the mouse moves, there and
+  over the game, and hides again after 3 still seconds.
+- AMD graphics: if the driver crashes while it links a shader from the
+  parts xbased builds ahead (an RX 6600 on driver 26.11 at Halo 2's start,
+  on fast precision too), xbased builds them whole for that GPU and driver
+  from the next start, as on cards without that feature.
+
 ## 1.1.5 (2026-11)
 
 ### New

@@ -125,10 +125,24 @@ static void rows_console(List *l)
 
 /* ------------------------------------------------------------ settings */
 
+/* a shoulder button's name on a dark key, as the tab bar's ends show them
+ * with a gamepad (LB and RB turn the tabs, #322); its width */
+static float shoulder_key(float x, const char *name)
+{
+    const float w = ui_text_width(name, 17, UI_FONT_BOLD) + 22;
+    ui_round(x, 131, w, 30, 15, ui_alpha((UiColor){0x30, 0x34, 0x30, 0xFF}, 0.95f));
+    ui_round_outline(x, 131, w, 30, 15, 1, UI_GREEN_DIM);
+    ui_text(x + w / 2, 135, name, 17, UI_FONT_BOLD, UI_WHITE, UI_ALIGN_CENTER);
+    return w;
+}
+
 static void tab_bar(const enum UiStr *tabs, int n)
 {
     const float W = ui_w();
     float x = 60;
+    if (D.in.pad) {
+        x += shoulder_key(x, "LB") + 12;
+    }
     for (int i = 0; i < n; i++) {
         const char *t = T(tabs[i]);
         const float w = ui_text_width(t, 24, UI_FONT_BOLD) + 44;
@@ -142,6 +156,9 @@ static void tab_bar(const enum UiStr *tabs, int n)
         ui_round_outline(x, 124, w, 44, 22, s ? 2 : 1, s ? UI_GREEN_HI : UI_GREEN_DIM);
         ui_text(x + w / 2, 132, t, 24, UI_FONT_BOLD, s ? UI_WHITE : UI_GREY, UI_ALIGN_CENTER);
         x += w + 12;
+    }
+    if (D.in.pad) {
+        x += shoulder_key(x, "RB") + 12;
     }
     if (x < W - 200) {
         draw_button_glyph(x + 8, 132, 0, 0); /* nothing: keeps the layout simple */
@@ -207,6 +224,58 @@ static const char *video_mode_name(void)
 
 static void help_panel(const char *s);
 
+/* A row's help drawn once its list is (help_flush after list_end): rows
+ * after it drew over the panel */
+static const char *g_help_later;
+
+static void help_later(const char *s)
+{
+    g_help_later = s;
+}
+
+static void help_flush(void)
+{
+    if (g_help_later) {
+        help_panel(g_help_later);
+        g_help_later = NULL;
+    }
+}
+
+/* the sticks' inverted axes (#324): a camera on the right stick that turns
+ * the other way than the player is used to; the game's own or the global */
+static void invert_rows(List *l)
+{
+    static const char *const iv[] = {"off", "y", "x", "xy"};
+    const char *in[] = {T(S_OFF), T(S_INVERT_Y), T(S_INVERT_X), T(S_INVERT_XY)};
+    opt_choice(l, S_INVERT_RSTICK, "stick.rinvert", iv, in, 4, "off");
+    opt_choice(l, S_INVERT_LSTICK, "stick.linvert", iv, in, 4, "off");
+}
+
+/* the cache partitions emptied now, asked first */
+static void clear_cache_now(Dash *d)
+{
+    const char *hdd = cfg_get(&d->global, "hdd");
+    const int n = cfg_clear_game_cache(hdd && hdd[0] ? hdd : NULL);
+    dash_toast(T(n < 0 ? S_CACHE_CLEAR_FAIL : S_CACHE_CLEARED));
+}
+
+/* The game cache (#308): emptied before each game (cache.clear=, off by
+ * default; a game's own or the global), and emptied now; selected, what it
+ * is and why one would */
+static void cache_rows(List *l)
+{
+    opt_bool(l, S_CACHE_CLEAR, "cache.clear", false, false);
+    if (list_selected(l)) {
+        help_later(T(S_CACHE_HELP));
+    }
+    if (list_row(l, T(S_CACHE_CLEAR_NOW), NULL, NULL)) {
+        dash_ask(T(S_CACHE_CLEAR_ASK), clear_cache_now);
+    }
+    if (list_selected(l)) {
+        help_later(T(S_CACHE_HELP));
+    }
+}
+
 /* The GPU precision (precision=, hw/xbox/hle/vk/precision.h): automatic,
  * exact or fast; selected, its help with the last game's verdict (the
  * HLE's last_precision.txt beside the hard disk). */
@@ -243,7 +312,7 @@ static void precision_row(List *l, bool game)
     } else {
         snprintf(help, sizeof(help), "%s", T(S_PREC_HELP));
     }
-    help_panel(help);
+    help_later(help);
 }
 
 void scr_settings(void)
@@ -254,7 +323,8 @@ void scr_settings(void)
     D.editing_game = false;
     tab_bar(tabs, 6);
     List l;
-    list_begin(&l, 74, 196, W - 148, H - 290, 58);
+    /* the System tab's rows end above the help panel (help_later) */
+    list_begin(&l, 74, 196, W - 148, D.tab == 2 ? H - 376 : H - 290, 58);
     (void)video_mode_name;
     switch (D.tab) {
     case 0:
@@ -314,6 +384,7 @@ void scr_settings(void)
         }
         opt_bool(&l, S_PREBUILD, "prebuild", true, false);
         precision_row(&l, false);
+        cache_rows(&l);
         break;
     }
     case 3: {
@@ -411,6 +482,7 @@ void scr_settings(void)
                 cfg_set_int(&D.global, "stick.range", r < 50 ? 50 : r > 150 ? 150 : r);
             }
         }
+        invert_rows(&l);
         {
             /* the triggers' dead zone and full press, set on their own screen */
             char val[64];
@@ -463,6 +535,7 @@ void scr_settings(void)
         break;
     }
     list_end(&l);
+    help_flush();   /* a row's help over the list (help_later) */
     if (D.in.back) {
         dash_save_cfg();
         dash_pop();
@@ -502,7 +575,7 @@ void scr_game_settings(void)
     draw_header(T(S_GAME_SETTINGS), D.cur->g.title);
     D.editing_game = true;
     List l;
-    list_begin(&l, 74, 150, W - 148, H - 244, 58);
+    list_begin(&l, 74, 150, W - 148, H - 330, 58);   /* above the help panel (help_later) */
     rows_video(&l);
     rows_language(&l);
     opt_videoflag(&l, S_WIDESCREEN, 0x10000);
@@ -522,10 +595,12 @@ void scr_game_settings(void)
         opt_choice(&l, S_SHADERS_MODE, "shaders", sv, sn, 3, "hybrid");
     }
     precision_row(&l, true);
+    cache_rows(&l);
     if (list_row(&l, T(S_RESET_GAME), NULL, NULL)) {
         dash_ask(T(S_RESET_GAME), reset_game);
     }
     list_end(&l);
+    help_flush();   /* a row's help over the list (help_later) */
     ui_text(74, H - 82, T(S_NEEDS_RESTART), 18, UI_FONT_REGULAR, UI_GREY, UI_ALIGN_LEFT);
     if (D.in.back) {
         dash_pop();
@@ -1191,6 +1266,7 @@ void scr_controls(void)
         if (list_row(&l, T(S_STICK_ZONES), val, NULL)) {
             dash_push(SCR_STICKS);
         }
+        invert_rows(&l);
         const Config *tc = cfg_get(&D.game, "trigger.deadzone") ? &D.game : &D.global;
         const Config *fc = cfg_get(&D.game, "trigger.full") ? &D.game : &D.global;
         const bool town = cfg_get(&D.game, "trigger.deadzone") || cfg_get(&D.game, "trigger.full");

@@ -17,6 +17,7 @@ set(NC_APP_SOURCES
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/xbox_data.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/library.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/input_map.c"
+  "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/pointer.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/sound.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/dash.c"
   "${CMAKE_CURRENT_SOURCE_DIR}/app/ui/dash_settings.c"
@@ -42,7 +43,7 @@ endif()
 set_target_properties(xbased PROPERTIES OUTPUT_NAME xbased)
 # xbased's version, set here alone: the app's (xbased_version.h, from
 # app/version.h.in) and the executable's version information (xbased.rc)
-set(XBASED_VERSION 1.1.5)
+set(XBASED_VERSION 1.1.6)
 string(REPLACE "." "," XBASED_VERSION_RC "${XBASED_VERSION}")
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/app/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/gen/xbased_version.h" @ONLY)
 if(WIN32)
