@@ -687,6 +687,22 @@ void nc_ke_block(NcKernel *k)
 
 /* Ends t's nc_ke_block: status in its EAX, ready, ahead of the running
  * thread if its priority is higher. */
+bool nc_ke_object_waited(NcKernel *k, uint32_t object)
+{
+    for (unsigned i = 0; i < k->threads_hi; i++) {
+        const NcThread *t = &k->threads[i];
+        if (t->state != NC_T_WAITING) {
+            continue;
+        }
+        for (unsigned j = 0; j < t->wait.count; j++) {
+            if (t->wait.objects[j] == object) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 void nc_ke_wake(NcKernel *k, NcThread *t, uint32_t status)
 {
     nc_context_set_gpr(&t->ctx, NC_EAX, status);

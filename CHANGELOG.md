@@ -1,5 +1,15 @@
 # xbased changelog
 
+## 1.1.9 (2026-11)
+
+### Fixes
+- The Nightmare Before Christmas: Oogie's Revenge: the game froze after its
+  first cutscene, and sometimes on a black screen right at the intro. The
+  timers it creates by the thousand were never freed and filled the memory,
+  and its level loading took a read still in progress as finished. Both
+  fixed: it now reaches the first level.
+- Games that create many timers no longer slowly fill the console's memory.
+
 ## 1.1.8 (2026-11)
 
 ### Fixes

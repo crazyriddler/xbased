@@ -534,6 +534,11 @@ void nc_ke_init_event(NcKernel *k, uint32_t event, unsigned type, bool signaled)
  * timeout); nc_ke_wake ends it with the call's status. */
 void nc_ke_block(NcKernel *k);
 void nc_ke_wake(NcKernel *k, NcThread *t, uint32_t status);
+/* Whether a waiting thread waits on object (an object freed meanwhile:
+ * ob.c release). */
+bool nc_ke_object_waited(NcKernel *k, uint32_t object);
+/* A timer object out of the timer queue before its memory goes (ob.c). */
+void nc_timer_forget(NcKernel *k, uint32_t timer);
 
 /* FILE_OBJECT.Event (a KEVENT): what a wait on a file handle waits for, set
  * when an I/O on the file issued without an event of its own completes. */

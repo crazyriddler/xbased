@@ -265,6 +265,11 @@ static bool timer_cancel(NcKernel *k, uint32_t timer)
     return true;
 }
 
+void nc_timer_forget(NcKernel *k, uint32_t timer)
+{
+    timer_cancel(k, timer);
+}
+
 static void timer_init(NcKernel *k, uint32_t timer, uint32_t type)
 {
     uint8_t *t = nc_vm_host(k->vm, timer);

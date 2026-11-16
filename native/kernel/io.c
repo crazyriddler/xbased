@@ -789,6 +789,14 @@ void nc_io_close(NcKernel *k, uint32_t object)
     }
 }
 
+/* pended_status: an overlapped request that pends reads STATUS_PENDING in
+ * its IoStatusBlock until it completes, as the console's kernel leaves it:
+ * XAPI's ReadFileEx doesn't set the OVERLAPPED itself, and a title that
+ * checks it (HasOverlappedIoCompleted) and reuses it took the last read's
+ * SUCCESS as this one done. The Nightmare Before Christmas: Oogie's Revenge
+ * reads a level's packed file in 256 KiB blocks from threads that end at
+ * once, one OVERLAPPED for all, and unpacked a block the drive hadn't read
+ * yet: zeros, a fault past its tables as the first level loaded (#326). */
 static void io_status(NcKernel *k, uint32_t iosb, uint32_t status, uint32_t info)
 {
     if (iosb) {
@@ -2068,6 +2076,8 @@ static uint64_t read_runs(NcKernel *k, const uint32_t *a, IoRun *run, unsigned n
             }
             if (!async) {
                 nc_ke_block(k);         /* the read's status replaces this when it completes */
+            } else {
+                io_status(k, a[4], STATUS_PENDING, 0);  /* until it completes (pended_status) */
             }
             return STATUS_PENDING;
         }
@@ -2311,6 +2321,8 @@ static uint64_t write_data(NcKernel *k, const uint32_t *a, const uint8_t *src, u
             }
             if (!nf->async) {
                 nc_ke_block(k);         /* the write's status replaces this when it completes */
+            } else {
+                io_status(k, a[4], STATUS_PENDING, 0);  /* until it completes (pended_status) */
             }
             return STATUS_PENDING;
         }

@@ -20,7 +20,7 @@ static uint32_t g_ob_size[NC_OB_TYPES];
 
 static bool freeable(enum NcObType type)
 {
-    return type == NC_OB_FILE || type == NC_OB_SYMLINK;
+    return type == NC_OB_FILE || type == NC_OB_SYMLINK || type == NC_OB_TIMER;
 }
 
 static enum NcObType type_of(NcKernel *k, uint32_t object)
@@ -43,6 +43,18 @@ static void release(NcKernel *k, uint32_t object, enum NcObType type)
         nc_vm_rd32(k->vm, hdr + 0x4) ||
         nc_vm_rd32(k->vm, hdr) > 1) {
         return;
+    }
+    if (type == NC_OB_TIMER) {
+        /* A timer goes as the console's does with its last handle (its
+         * delete routine cancels it): out of the timer queue first, and
+         * kept while a thread still waits on it. Kept for good, the timers
+         * of a title that makes one per wait filled RAM: The Nightmare
+         * Before Christmas: Oogie's Revenge's 171,000 by its title movie,
+         * 9.3 MiB of pool, and the movie's next block found no room (#326). */
+        if (nc_ke_object_waited(k, object)) {
+            return;
+        }
+        nc_timer_forget(k, object);
     }
     nc_vm_wr32(k->vm, hdr + 0x8, 0);    /* a stale lookup of it fails the type check */
     k->pool_ob -= OB_HEADER + g_ob_size[type];

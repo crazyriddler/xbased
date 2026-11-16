@@ -56,6 +56,8 @@ void nc_ke_clear_event(NcKernel *k, uint32_t event) { (void)k; (void)event; }
 void nc_ke_init_event(NcKernel *k, uint32_t event, unsigned type, bool signaled) { (void)k; (void)event; (void)type; (void)signaled; }
 uint32_t nc_ke_set_event(NcKernel *k, uint32_t event) { (void)k; (void)event; return 0; }
 void nc_ke_wake(NcKernel *k, NcThread *t, uint32_t status) { (void)k; (void)t; (void)status; }
+bool nc_ke_object_waited(NcKernel *k, uint32_t object) { (void)k; (void)object; return false; }
+void nc_timer_forget(NcKernel *k, uint32_t timer) { (void)k; (void)timer; }
 void nc_ke_port_queue(NcKernel *k, uint32_t port, uint32_t key, uint32_t ctx, uint32_t status, uint32_t info)
 {
     (void)k; (void)port; (void)key; (void)ctx; (void)status; (void)info;
