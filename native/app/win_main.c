@@ -51,6 +51,7 @@
 #include "native/core/cheats.h"
 #include "native/core/core.h"
 #include "native/core/mods.h"
+#include "native/core/vm.h"   /* nc_vm_reserve_early */
 #include "native/core/options.h"
 #include "native/dev/usb.h"
 #include "native/kernel/kernel.h"
@@ -1724,6 +1725,9 @@ int main(int argc, char *argv[])
                 g_cmdline[g_ncmdline++] = strdup(argv[i]);
             }
         }
+    }
+    if (disc && strcmp(disc, "none")) {
+        nc_vm_reserve_early();      /* the guest's addresses before SDL and the window's hooks (#321) */
     }
     bool again = opt_flag("relaunch");
     for (int i = 0; i < g_nargs; i++) {

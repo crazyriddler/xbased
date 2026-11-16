@@ -43,7 +43,7 @@ endif()
 set_target_properties(xbased PROPERTIES OUTPUT_NAME xbased)
 # xbased's version, set here alone: the app's (xbased_version.h, from
 # app/version.h.in) and the executable's version information (xbased.rc)
-set(XBASED_VERSION 1.1.6)
+set(XBASED_VERSION 1.1.7)
 string(REPLACE "." "," XBASED_VERSION_RC "${XBASED_VERSION}")
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/app/version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/gen/xbased_version.h" @ONLY)
 if(WIN32)

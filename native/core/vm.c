@@ -32,6 +32,7 @@ static bool guest_ro(uint32_t va)
 #ifdef _WIN32
 /* core/vm_win.cpp: the host side on Windows (the guest at address 0) */
 bool nc_vmos_init(NcVm *vm, uint32_t ram_size);
+void nc_vmos_reserve_early(void);
 bool nc_vmos_map(NcVm *vm, uint32_t va, uint32_t pa, uint32_t len);
 bool nc_vmos_unmap(NcVm *vm, uint32_t va, uint32_t len);
 void nc_vmos_protect(NcVm *vm, uint32_t va, uint32_t len, int prot);
@@ -53,6 +54,13 @@ static void guest_protect(NcVm *vm, uint32_t va, size_t len, int prot)
 }
 
 const char *nc_vm_why;
+
+void nc_vm_reserve_early(void)
+{
+#ifdef _WIN32
+    nc_vmos_reserve_early();
+#endif
+}
 
 bool nc_vm_init(NcVm *vm, uint32_t ram_size)
 {

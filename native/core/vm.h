@@ -48,6 +48,10 @@ typedef struct NcVm {
 #define NC_PTE_VALID 1u
 
 bool nc_vm_init(NcVm *vm, uint32_t ram_size);
+/* Windows: the guest's low 4 GiB held as early as the process can (a
+ * game's, before SDL and its window: DLLs that hook every window load at
+ * fixed low addresses, #321); nc_vm_init takes them over. Elsewhere: none. */
+void nc_vm_reserve_early(void);
 
 /* Why nc_vm_init failed, in words for the player (NULL: nothing to tell). */
 extern const char *nc_vm_why;

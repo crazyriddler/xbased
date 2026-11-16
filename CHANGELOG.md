@@ -1,5 +1,17 @@
 # xbased changelog
 
+## 1.1.7 (2026-11)
+
+### Fixes
+- Games wouldn't start while some programs ran in the background (a
+  clipboard manager, others that hook every window): "The game's program
+  (default.xbe) can't be loaded". Their DLL took the addresses where the
+  game's code goes. xbased now holds those addresses from the start, so
+  those programs can stay open.
+- Shin Sangoku Musou 3 (Japan, Asia): the screen went black as a battle
+  started. The game reads a little past the top of its stack there, which
+  the console allows.
+
 ## 1.1.6 (2026-11)
 
 ### New

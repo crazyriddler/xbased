@@ -71,7 +71,22 @@
 #define STACK_GUARD    0x10000u
 #define DEFAULT_STACK  0x10000u
 #define KERNEL_STACK_SIZE 0x3000u       /* the least the kernel makes (nboxkrnl kernel.hpp) */
+#define STACK_OVER     0x4000u          /* zeroed pages over a thread's stack top (thread_create) */
 #define DEFAULT_PRIORITY 8
+
+/* STACK_OVER's pages over a stack's top, those not mapped yet, zeroed; how
+ * many were */
+static unsigned stack_over_map(NcVm *vm, uint32_t top)
+{
+    unsigned n = 0;
+    for (uint32_t p = top; p < top + STACK_OVER; p += NC_PAGE) {
+        if (nc_vm_phys(vm, p) == UINT32_MAX && nc_vm_alloc_at(vm, p, NC_PAGE, NULL)) {
+            memset(nc_vm_host(vm, p), 0, NC_PAGE);
+            n++;
+        }
+    }
+    return n;
+}
 
 static void list_init(NcVm *vm, uint32_t head)
 {
@@ -179,16 +194,17 @@ static NcThread *thread_create(NcKernel *k, uint32_t stack_size, uint32_t tls_si
     const uint32_t tib = top - FX_SAVE_AREA;
 
     NcVm *vm = k->vm;
-    /* A page over the top, zeroed (the slot's room past the stack, never
-     * anyone else's): on the console a title's thread starts under more of
-     * the kernel's and XAPI's frames, and a read a little past the top lands
-     * in memory there. Dave Mirra Freestyle BMX 2 indexes an array on its
-     * stack with a stray byte (0xFF) at its title screen, 0x80 bytes over
-     * the top here: a fault the title doesn't handle. It goes with the stack
-     * (the scheduler's free of a terminated thread). */
-    if (nc_vm_phys(vm, top) == UINT32_MAX && nc_vm_alloc_at(vm, top, NC_PAGE, NULL)) {
-        memset(nc_vm_host(vm, top), 0, NC_PAGE);
-    }
+    /* Pages over the top, zeroed (the slot's room past the stack, or the
+     * next slot's guard: never anyone else's): on the console a title's
+     * thread starts under more of the kernel's and XAPI's frames, and a read
+     * past the top lands in memory there. Dave Mirra Freestyle BMX 2 indexes
+     * an array on its stack with a stray byte (0xFF) at its title screen,
+     * 0x80 bytes over the top here; Shin Sangoku Musou 3 (Japan, Asia) walks
+     * a model's table from a copy of its header on its stack, the table's
+     * offset taken from the whole file, up to 0x3030 bytes over the top as a
+     * battle starts (#316): faults the titles don't handle. They go with the
+     * stack (the scheduler's free of a terminated thread). */
+    stack_over_map(vm, top);
     uint8_t *fx = nc_vm_host(vm, tib);         /* the top page's: a slot may come back used */
     memset(fx, 0, FX_SAVE_AREA);
     *(uint16_t *)(fx + FX_CONTROL_WORD) = 0x27F;
@@ -251,18 +267,17 @@ void nc_ps_old_stacks(NcKernel *k)
     unsigned n = 0;
     for (unsigned i = 0; i < NC_MAX_THREADS; i++) {
         const NcThread *t = &k->threads[i];
-        /* every thread now (thread_create's page): a state from before it too */
-        if (t->state == NC_T_FREE || t->stack_base >= NC_GPU_WINDOW ||
-            nc_vm_phys(k->vm, t->stack_base) != UINT32_MAX) {
+        /* every thread now (thread_create's pages): a state from before
+         * them too, or with the one page there was before #316 */
+        if (t->state == NC_T_FREE || t->stack_base >= NC_GPU_WINDOW) {
             continue;
         }
-        if (nc_vm_alloc_at(k->vm, t->stack_base, NC_PAGE, NULL)) {
-            memset(nc_vm_host(k->vm, t->stack_base), 0, NC_PAGE);
+        if (stack_over_map(k->vm, t->stack_base)) {
             n++;
         }
     }
     if (n) {
-        nc_log("xbased-native", "ps: %u threads from an older state: a page over each stack", n);
+        nc_log("xbased-native", "ps: %u threads from an older state: the pages over their stacks", n);
     }
 }
 
@@ -529,7 +544,7 @@ void nc_ps_schedule(NcKernel *k, NcFrame *f)
         /* Off its stack for good: the pages go back (titles start threads per
          * movie and load), the slot can hold a new thread. Its ETHREAD stays,
          * signaled, for whoever still holds a handle. */
-        const uint32_t end = cur->stack_base + NC_PAGE;     /* the page over the top (thread_create, nc_ps_old_stacks) */
+        const uint32_t end = cur->stack_base + STACK_OVER;  /* the pages over the top (thread_create, nc_ps_old_stacks) */
         for (uint32_t p = cur->stack_limit; p < end; p += NC_PAGE) {
             const uint32_t pa = nc_vm_phys(k->vm, p);
             if (pa != UINT32_MAX) {
