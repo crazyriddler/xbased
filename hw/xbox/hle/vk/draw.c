@@ -3514,6 +3514,9 @@ static HlePbResult mods_make(void *ctx, unsigned which, VkPipelineShaderStageCre
  * SPIR-V, the Vulkan pipeline. No render-thread state: the workers and the
  * prebuild run it too. cache_only: SPIR-V from the disk cache and the
  * pipeline from the driver's cache, HLE_PB_COMPILE when either would compile. */
+static HlePbResult pipeline_build_now(const void *key, const uint32_t *tok, uint32_t nslots,
+                                      bool cache_only, VkPipeline *out);
+
 static HlePbResult pipeline_build(const void *key, const uint32_t *tok, uint32_t nslots,
                                   bool cache_only, VkPipeline *out)
 {
@@ -3522,6 +3525,27 @@ static HlePbResult pipeline_build(const void *key, const uint32_t *tok, uint32_t
     if (cache_only && !g_hvk.caps.cache_control) {
         return HLE_PB_COMPILE;
     }
+    /* one that crashed this GPU's driver in an earlier run (precision.h):
+     * not built, its draws skipped; the one built now is this thread's for
+     * the crash handler */
+    const uint64_t kh = key_hash(k, g_key_bytes);
+    if (hle_precision_pipe_blocked(kh)) {
+        static unsigned told;
+        if (told++ < 8) {
+            hle_log("xbased-hle-pipe", "pipeline %016llx not built: it crashed this driver in an earlier run", (unsigned long long)kh);
+        }
+        return HLE_PB_FAILED;
+    }
+    hle_precision_pipe_set(kh);
+    const HlePbResult r = pipeline_build_now(key, tok, nslots, cache_only, out);
+    hle_precision_pipe_set(0);
+    return r;
+}
+
+static HlePbResult pipeline_build_now(const void *key, const uint32_t *tok, uint32_t nslots,
+                                      bool cache_only, VkPipeline *out)
+{
+    const PipeKey *k = key;
     enum { SRC_MAX = 65536 };
     g_autofree char *vsrc = g_malloc(SRC_MAX), *fsrc = g_malloc(SRC_MAX);
     /* the interpreters' (t_uber): their texts, the key's state */

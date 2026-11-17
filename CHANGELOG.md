@@ -1,5 +1,14 @@
 # xbased changelog
 
+## 1.1.10 (2026-11)
+
+### Fixes
+- OutRun 2006: Coast 2 Coast closed as a race loaded on some AMD GPUs
+  (older GCN ones such as the Vega 3, with AMD's driver). The driver itself
+  crashes building one of the game's shaders. xbased now remembers a shader
+  that crashed the driver and doesn't build it again on that GPU and driver,
+  so after one more close the game goes on, maybe missing that one effect.
+
 ## 1.1.9 (2026-11)
 
 ### Fixes

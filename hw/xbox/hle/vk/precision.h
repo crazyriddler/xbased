@@ -63,5 +63,13 @@ void hle_precision_crashed(void);
 void hle_precision_link_enter(void);
 void hle_precision_link_leave(void);
 bool hle_precision_gpl_blocked(char *why, size_t wn);
+/* The pipeline this thread builds (its key's hash, 0 none): a driver crash
+ * in its build keeps it from being built again on this GPU and driver
+ * (hle_precision_pipe_blocked from the next run: its draws are skipped).
+ * AMD's driver for GCN GPUs (22.40 on a Vega 3) crashed building one of
+ * OutRun 2006's as a race loaded, on fast precision too, at every try
+ * (#329): a missing effect rather than the game gone. */
+void hle_precision_pipe_set(uint64_t key);
+bool hle_precision_pipe_blocked(uint64_t key);
 
 #endif

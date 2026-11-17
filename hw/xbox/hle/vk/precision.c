@@ -18,6 +18,11 @@ static char g_id[96];               /* "vendor:device:driver" of the GPU, its ve
 static char g_path[320];            /* <base>/gpu_precision.txt */
 static __thread int t_building;     /* in a driver call that compiles */
 static __thread int t_linking;      /* in one from pipeline libraries (gpl.c) */
+static __thread uint64_t t_pipe;    /* the pipeline this thread builds (hle_precision_pipe_set) */
+#define MAX_BAD_PIPES 64
+static uint64_t g_bad_pipes[MAX_BAD_PIPES];   /* (read once, hle_precision_init) */
+static unsigned g_nbad_pipes;
+static void bad_pipes_read(void);
 static HleMutex g_b_mu;             /* the exact builds' measure (made in hle_precision_init, before any worker) */
 
 /* the measurement: busy GPU time in whole seconds of wall time */
@@ -187,6 +192,7 @@ void hle_precision_init(VkPhysicalDevice phys)
             sg.minSubgroupSize, sg.maxSubgroupSize);
     /* the dashboard shows auto's verdict and why */
     char last[400];
+    bad_pipes_read();
     snprintf(last, sizeof(last), "%slast_precision.txt", hle_host_base_path());
     FILE *f = fopen(last, "w");
     if (f) {
@@ -293,8 +299,55 @@ bool hle_precision_gpl_blocked(char *why, size_t wn)
     return g_path[0] && verdict_read_id(id, v, sizeof(v), why, wn) && !strcmp(v, "off");
 }
 
+void hle_precision_pipe_set(uint64_t key)
+{
+    t_pipe = key;
+}
+
+bool hle_precision_pipe_blocked(uint64_t key)
+{
+    for (unsigned i = 0; i < g_nbad_pipes; i++) {
+        if (g_bad_pipes[i] == key) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* This GPU and driver's pipelines that crashed it ("<id>/pipe:<key> off"
+ * lines of the verdicts' file) */
+static void bad_pipes_read(void)
+{
+    FILE *f = g_path[0] ? fopen(g_path, "r") : NULL;
+    if (!f) {
+        return;
+    }
+    char line[512], pre[128];
+    snprintf(pre, sizeof(pre), "%s/pipe:", g_id);
+    const size_t pl = strlen(pre);
+    while (fgets(line, sizeof(line), f) && g_nbad_pipes < MAX_BAD_PIPES) {
+        unsigned long long key;
+        char v[16];
+        if (!strncmp(line, pre, pl) && sscanf(line + pl, "%llx %15s", &key, v) == 2 && !strcmp(v, "off")) {
+            g_bad_pipes[g_nbad_pipes++] = key;
+        }
+    }
+    fclose(f);
+    if (g_nbad_pipes) {
+        hle_log("xbased-hle-back", "precision: %u pipeline(s) not built on this GPU and driver (they crashed its "
+                "compiler in an earlier run): their draws are skipped", g_nbad_pipes);
+    }
+}
+
 void hle_precision_crashed(void)
 {
+    if (t_building > 0 && t_pipe && g_path[0]) {
+        /* the pipeline itself, kept out from the next run whatever else
+         * changes (a crash on fast too: nothing else to fall back to) */
+        char id[160];
+        snprintf(id, sizeof(id), "%s/pipe:%016llx", g_id, (unsigned long long)t_pipe);
+        verdict_write_id(id, "off", "the driver crashed building it in an earlier run");
+    }
     if (t_linking > 0 && g_path[0]) {
         /* in the libraries' link: whole pipelines from the next run, the
          * precision as it was (a link compiles none of the shaders anew; it
