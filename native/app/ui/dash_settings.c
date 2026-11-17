@@ -407,6 +407,7 @@ void scr_settings(void)
         }
         opt_bool(&l, S_COVERS_ONLINE, "covers", true, false);
         opt_bool(&l, S_ANIMATED_BG, "ui.anim", true, false);
+        opt_bool(&l, S_CASE3D, "ui.case3d", true, false);
         opt_bool(&l, S_TRANSITIONS, "ui.fx", true, false);
         opt_bool(&l, S_UI_43, "ui.43", false, false);   /* menus in a centered 4:3 area (ui_set_frame43) */
         opt_bool(&l, S_UI_SOUNDS, "ui.sounds", true, false);
