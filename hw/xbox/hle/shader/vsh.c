@@ -4,7 +4,7 @@
  * Semantics follow NV_vertex_program1_1 plus the NV2A rules games rely on:
  * - a MAC and an ILU operation in one slot read their operands before
  *   either writes (both results are computed into temporaries first);
- * - MUL/MAD: a zero factor gives zero even against inf/NaN;
+ * - MUL/MAD/DP3/DP4/DPH/DST: a zero factor gives zero even against inf/NaN;
  * - RCP(0) = +inf, RCC clamps the magnitude to [2^-64, 2^64];
  * - R12 is oPos;
  * - the program leaves oPos in screen space (the XDK appends the viewport
@@ -126,13 +126,9 @@ static void op_expr(Buf *b, const Nv2aVshOperation *o, bool xf)
     case NV2AOP_MAD:
         put(b, "(mulz("); I(0); put(b, ", "); I(1); put(b, ") + "); I(2); put(b, ")");
         break;
-    case NV2AOP_DP3: put(b, "vec4(dot(("); I(0); put(b, ").xyz, ("); I(1); put(b, ").xyz))");
-        break;
-    case NV2AOP_DP4: put(b, "vec4(dot("); I(0); put(b, ", "); I(1); put(b, "))"); break;
-    case NV2AOP_DPH:
-        put(b, "vec4(dot(("); I(0); put(b, ").xyz, ("); I(1); put(b, ").xyz) + ("); I(1);
-        put(b, ").w)");
-        break;
+    case NV2AOP_DP3: put(b, "dp3z("); I(0); put(b, ", "); I(1); put(b, ")"); break;
+    case NV2AOP_DP4: put(b, "dp4z("); I(0); put(b, ", "); I(1); put(b, ")"); break;
+    case NV2AOP_DPH: put(b, "dphz("); I(0); put(b, ", "); I(1); put(b, ")"); break;
     case NV2AOP_DST:
         put(b, "dst4("); I(0); put(b, ", "); I(1); put(b, ")");
         break;
@@ -206,7 +202,21 @@ static const char k_lib[] =
     "  vec4 z = vec4(equal(a, vec4(0.0))) + vec4(equal(b, vec4(0.0)));\n"
     "  return mix(r, vec4(0.0), greaterThan(z, vec4(0.0)));\n"
     "}\n"
-    "vec4 dst4(vec4 a, vec4 b) { return vec4(1.0, a.y * b.y, a.z, b.w); }\n"
+    /* the dot products are sums of the same multiplies: a zero weight against an inf or NaN (a bone matrix
+     * row nobody set) is 0 here as it is in MUL, not a NaN that spreads over the vertex */
+    "vec4 dp3z(vec4 a, vec4 b) {\n"
+    "  vec4 p = mulz(vec4(a.xyz, 0.0), vec4(b.xyz, 0.0));\n"
+    "  return vec4(p.x + p.y + p.z);\n"
+    "}\n"
+    "vec4 dp4z(vec4 a, vec4 b) {\n"
+    "  vec4 p = mulz(a, b);\n"
+    "  return vec4(p.x + p.y + p.z + p.w);\n"
+    "}\n"
+    "vec4 dphz(vec4 a, vec4 b) {\n"
+    "  vec4 p = mulz(vec4(a.xyz, 1.0), b);\n"
+    "  return vec4(p.x + p.y + p.z + p.w);\n"
+    "}\n"
+    "vec4 dst4(vec4 a, vec4 b) { return vec4(1.0, mulz(a, b).y, a.z, b.w); }\n"
     "vec4 rcp4(float x) { return vec4(x == 0.0 ? uintBitsToFloat(0x7F800000u) : 1.0 / x); }\n"
     "vec4 rcc4(float x) {\n"
     "  float r = 1.0 / x;\n"
