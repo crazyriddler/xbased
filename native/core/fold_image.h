@@ -36,8 +36,9 @@ bool nc_fold_xbe_path(const char *path, char *out, size_t cap);
  * with an ISO attacher's default.xbe beside it, a small XBE with the
  * game's name and title ID that mounts the image as the DVD drive and
  * starts it. path: the folder or its default.xbe. The folder's one image
- * (.iso .xiso .chd, over 1 MiB) in out, true; none, or more than one (a
- * split image's parts), false, out untouched. */
+ * (.iso .xiso .cci .chd, over 1 MiB; a split CCI's first part) in out,
+ * true; none, or more than one (a split ISO's parts), false, out
+ * untouched. */
 bool nc_fold_attached_image(const char *path, char *out, size_t cap);
 
 #ifdef __cplusplus

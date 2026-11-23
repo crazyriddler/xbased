@@ -11,6 +11,7 @@
 #include "native/core/xdvdfs.h"
 #include "native/core/fold_image.h"
 #include "native/core/chd_image.h"
+#include "native/core/cci_image.h"
 #include "native/core/nbd_image.h"
 
 #include <ctype.h>
@@ -51,6 +52,9 @@ static bool image_read(int fd, void *buf, size_t len, uint64_t off)
 {
     if (nc_chd_is(fd)) {
         return nc_chd_read(fd, buf, len, off);     /* a CHD: the image it holds */
+    }
+    if (nc_cci_is(fd)) {
+        return nc_cci_read(fd, buf, len, off);     /* a CCI: the image it holds */
     }
     if (nc_nbd_is(fd)) {
         return nc_nbd_read(fd, buf, len, off);     /* an NBD server's (GDOX's drive) */
@@ -93,14 +97,15 @@ bool nc_disc_open(NcDisc *d, int fd)
 {
     memset(d, 0, sizeof(*d));
     d->fd = fd;
-    /* a CHD image, or a game folder's default.xbe: read through it from here on */
-    if (!nc_chd_attach(fd) && !nc_nbd_attach(fd)) {
+    /* a CHD or CCI image, or a game folder's default.xbe: read through it from here on */
+    if (!nc_chd_attach(fd) && !nc_cci_attach(fd) && !nc_nbd_attach(fd)) {
         nc_fold_attach(fd);
     }
     for (size_t i = 0; i < sizeof(k_part_offsets) / sizeof(k_part_offsets[0]); i++) {
         uint8_t vd[NC_XDVDFS_SECTOR];
         uint64_t off = k_part_offsets[i];
         if (!(nc_chd_is(fd)    ? nc_chd_read(fd, vd, sizeof(vd), off + 32ull * NC_XDVDFS_SECTOR)
+              : nc_cci_is(fd)  ? nc_cci_read(fd, vd, sizeof(vd), off + 32ull * NC_XDVDFS_SECTOR)
               : nc_nbd_is(fd)  ? nc_nbd_read(fd, vd, sizeof(vd), off + 32ull * NC_XDVDFS_SECTOR)
               : nc_fold_is(fd) ? nc_fold_read(fd, vd, sizeof(vd), off + 32ull * NC_XDVDFS_SECTOR)
                                : pread_all(fd, vd, sizeof(vd), off + 32ull * NC_XDVDFS_SECTOR))) {
@@ -117,6 +122,7 @@ bool nc_disc_open(NcDisc *d, int fd)
     }
     nc_log("xbased-native", "disc: no XDVDFS volume found");
     nc_chd_detach(fd);      /* its caller closes the descriptor */
+    nc_cci_detach(fd);
     nc_nbd_detach(fd);
     nc_fold_detach(fd);
     return false;
@@ -126,6 +132,7 @@ void nc_disc_close(NcDisc *d)
 {
     if (d->fd >= 0) {
         nc_chd_detach(d->fd);
+        nc_cci_detach(d->fd);
         nc_nbd_detach(d->fd);
         nc_fold_detach(d->fd);
         close(d->fd);

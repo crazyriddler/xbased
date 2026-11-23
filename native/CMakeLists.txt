@@ -157,7 +157,7 @@ target_include_directories(xbased_native PRIVATE "${NC_XXHASH_DIR}")
 target_compile_definitions(xbased_native PRIVATE HLE_HOST_TEST)
 target_link_libraries(xbased_native PUBLIC ${NC_CPU_LIB} xbased_hle xbased_apu nc_slirp ${NC_SYS_LIBS} z)
 target_compile_options(xbased_native PRIVATE -Wall -Wno-unused-parameter)
-target_sources(xbased_native PRIVATE core/chd_image.c core/fold_image.c core/nbd_image.c)
+target_sources(xbased_native PRIVATE core/chd_image.c core/cci_image.c core/fold_image.c core/nbd_image.c)
 
 # libchdr (NC_DEPS/libchdr, BSD-3, unmodified): CHD disc images
 # (core/chd_image.c), with its own LZMA, Zstandard and FLAC decoders and the

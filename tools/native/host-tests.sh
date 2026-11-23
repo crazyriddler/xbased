@@ -6,10 +6,10 @@
 #
 # - tests/hle: the pure modules of the GPU layer and the core (CMake)
 # - tests/native: the kernel's crypto, the upcase table, the GLib subset; and
-#   under the address sanitizer the disc reader's directory walk, the
-#   kernel's dispatch of processor exceptions, its files and devices called
-#   with no title, and the savestate's cache-drive section read as a file
-#   from anywhere
+#   under the address sanitizer the disc reader's directory walk and CCI
+#   images, the kernel's dispatch of processor exceptions, its files and
+#   devices called with no title, and the savestate's cache-drive section
+#   read as a file from anywhere
 # - cputest: the translator (native/cpu/cpu_x86.cpp) against the host
 #   processor itself, from the app's build folder (default ../build/win;
 #   Windows only for now)
@@ -81,12 +81,15 @@ build case_test -I. tests/native/rtl/case_test.c
 build glib_test -Inative/compat/glib tests/native/compat/glib_test.c native/compat/glib/glib.c -lpthread
 # the disc reader's directory walk on damaged and crafted tables, under the address sanitizer
 if [ "$PLAT" = win ]; then
-  build xdvdfs_test -g -fsanitize=address -D_GNU_SOURCE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00     -I. -Inative/compat/win/include -include nc_win_posix.h tests/native/disc/xdvdfs_test.c native/core/xdvdfs.c     native/compat/win/win.c -lws2_32 -liphlpapi -lwinmm -lbcrypt -lsynchronization -lpthread
+  build xdvdfs_test -g -fsanitize=address -D_GNU_SOURCE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00     -I. -Inative/compat/win/include -include nc_win_posix.h tests/native/disc/xdvdfs_test.c native/core/xdvdfs.c     native/core/cci_image.c native/compat/win/win.c -lws2_32 -liphlpapi -lwinmm -lbcrypt -lsynchronization -lpthread
   # a game folder read as a disc, through the reader
-  build fold_test -g -fsanitize=address -D_GNU_SOURCE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00     -I. -Inative/compat/win/include -include nc_win_posix.h tests/native/disc/fold_test.c native/core/fold_image.c     native/core/xdvdfs.c native/compat/win/win.c -lws2_32 -liphlpapi -lwinmm -lbcrypt -lsynchronization -lpthread
+  build fold_test -g -fsanitize=address -D_GNU_SOURCE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00     -I. -Inative/compat/win/include -include nc_win_posix.h tests/native/disc/fold_test.c native/core/fold_image.c     native/core/xdvdfs.c native/core/cci_image.c native/compat/win/win.c -lws2_32 -liphlpapi -lwinmm -lbcrypt -lsynchronization -lpthread
+  # a CCI image (whole and split) read as a disc, and damaged ones
+  build cci_test -g -fsanitize=address -DNC_CCI_SPLIT_AT=0x8000 -D_GNU_SOURCE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00     -I. -Inative/compat/win/include -include nc_win_posix.h tests/native/disc/cci_test.c native/core/cci_image.c     native/core/xdvdfs.c native/compat/win/win.c -lws2_32 -liphlpapi -lwinmm -lbcrypt -lsynchronization -lpthread
 else
-  build xdvdfs_test -g -fsanitize=address -D_GNU_SOURCE -I. -Inative/compat/linux/include     tests/native/disc/xdvdfs_test.c native/core/xdvdfs.c
-  build fold_test -g -fsanitize=address -D_GNU_SOURCE -I. -Inative/compat/linux/include     tests/native/disc/fold_test.c native/core/fold_image.c native/core/xdvdfs.c -lpthread
+  build xdvdfs_test -g -fsanitize=address -D_GNU_SOURCE -I. -Inative/compat/linux/include     tests/native/disc/xdvdfs_test.c native/core/xdvdfs.c native/core/cci_image.c -lpthread
+  build fold_test -g -fsanitize=address -D_GNU_SOURCE -I. -Inative/compat/linux/include     tests/native/disc/fold_test.c native/core/fold_image.c native/core/xdvdfs.c native/core/cci_image.c -lpthread
+  build cci_test -g -fsanitize=address -DNC_CCI_SPLIT_AT=0x8000 -D_GNU_SOURCE -I. -Inative/compat/linux/include     tests/native/disc/cci_test.c native/core/cci_image.c native/core/xdvdfs.c -lpthread
 fi
 # the USB stack: a host driver's enumeration of the hubs and a gamepad, a report and rumble
 if [ "$PLAT" = win ]; then
@@ -104,11 +107,11 @@ fi
 # the savestate's cache-drive section read as a file from anywhere, and the mods' manifest and
 # their section of a state over a disc and a memory of the test's own
 if [ "$PLAT" = win ]; then
-  build io_test -g -fsanitize=address -DNC_DESKTOP=1 -D_GNU_SOURCE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 -I. -Inative/compat/win/include -include nc_win_posix.h tests/native/kernel/io_test.c native/kernel/io.c native/kernel/ob.c native/kernel/pool.c native/core/xdvdfs.c native/state/state.c native/compat/win/win.c -lz -lws2_32 -liphlpapi -lwinmm -lbcrypt -lsynchronization -lpthread
+  build io_test -g -fsanitize=address -DNC_DESKTOP=1 -D_GNU_SOURCE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 -I. -Inative/compat/win/include -include nc_win_posix.h tests/native/kernel/io_test.c native/kernel/io.c native/kernel/ob.c native/kernel/pool.c native/core/xdvdfs.c native/core/cci_image.c native/state/state.c native/compat/win/win.c -lz -lws2_32 -liphlpapi -lwinmm -lbcrypt -lsynchronization -lpthread
   build cache_test -g -fsanitize=address -DNC_DESKTOP=1 -D_GNU_SOURCE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 -I. "-I$DEPS/xxhash" -Inative/compat/win/include -include nc_win_posix.h tests/native/state/cache_test.c native/state/cache.c native/state/state.c native/compat/win/win.c -lz -lws2_32 -liphlpapi -lwinmm -lbcrypt -lsynchronization -lpthread
   build mods_test -g -fsanitize=address -DNC_DESKTOP=1 -D_GNU_SOURCE -DWIN32_LEAN_AND_MEAN -DNOMINMAX -D_WIN32_WINNT=0x0A00 -I. -Inative/compat/glib -Inative/compat/win/include -include nc_win_posix.h tests/native/core/mods_test.c native/core/mods.c native/core/cheats.c hw/xbox/hle/core/xbe.c native/state/state.c native/compat/win/win.c -lz -lws2_32 -liphlpapi -lwinmm -lbcrypt -lsynchronization -lpthread
 else
-  build io_test -g -fsanitize=address -DNC_DESKTOP=1 -D_GNU_SOURCE -I. -Inative/compat/linux/include tests/native/kernel/io_test.c native/kernel/io.c native/kernel/ob.c native/kernel/pool.c native/core/xdvdfs.c native/state/state.c native/compat/linux/linux.c -lz -lpthread
+  build io_test -g -fsanitize=address -DNC_DESKTOP=1 -D_GNU_SOURCE -I. -Inative/compat/linux/include tests/native/kernel/io_test.c native/kernel/io.c native/kernel/ob.c native/kernel/pool.c native/core/xdvdfs.c native/core/cci_image.c native/state/state.c native/compat/linux/linux.c -lz -lpthread
   build cache_test -g -fsanitize=address -DNC_DESKTOP=1 -D_GNU_SOURCE -I. "-I$DEPS/xxhash" -Inative/compat/linux/include tests/native/state/cache_test.c native/state/cache.c native/state/state.c -lz -lpthread
   build mods_test -g -fsanitize=address -DNC_DESKTOP=1 -D_GNU_SOURCE -I. -Inative/compat/glib -Inative/compat/linux/include tests/native/core/mods_test.c native/core/mods.c native/core/cheats.c hw/xbox/hle/core/xbe.c native/state/state.c native/compat/linux/linux.c -lz -lpthread
 fi

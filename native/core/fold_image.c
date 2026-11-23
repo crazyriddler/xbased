@@ -9,6 +9,7 @@
  * (its descriptor opened when first read, a few kept open).
  */
 #include "native/core/fold_image.h"
+#include "native/core/cci_image.h"
 #include "native/core/nc.h"
 #include "native/core/xdvdfs.h"
 
@@ -534,10 +535,12 @@ bool nc_fold_read(int fd, void *buf, size_t len, uint64_t off)
     return ok;
 }
 
-static bool image_name(const char *name)
+/* a disc image's path (a split CCI's first part: its later parts are of it) */
+static bool image_name(const char *path)
 {
-    const char *dot = strrchr(name, '.');
-    return dot && (!strcasecmp(dot, ".iso") || !strcasecmp(dot, ".xiso") || !strcasecmp(dot, ".chd"));
+    const char *dot = strrchr(path, '.');
+    return dot && (!strcasecmp(dot, ".iso") || !strcasecmp(dot, ".xiso") || !strcasecmp(dot, ".cci") ||
+                   !strcasecmp(dot, ".chd")) && !nc_cci_later_part(path);
 }
 
 bool nc_fold_attached_image(const char *path, char *out, size_t cap)
@@ -560,11 +563,11 @@ bool nc_fold_attached_image(const char *path, char *out, size_t cap)
     char found[1024] = "";
     unsigned n = 0;
     for (struct dirent *de; (de = readdir(d));) {
-        if (!image_name(de->d_name)) {
-            continue;
-        }
         char p[1024];
         snprintf(p, sizeof(p), "%s/%s", dir, de->d_name);
+        if (!image_name(p)) {
+            continue;
+        }
         struct stat st;
         if (stat(p, &st) || !S_ISREG(st.st_mode) || st.st_size <= (1 << 20)) {
             continue;

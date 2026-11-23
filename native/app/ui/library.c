@@ -10,6 +10,7 @@
 #include "native/app/ui/library.h"
 #include "native/app/ui/config.h"
 #include "native/app/ui/ui.h"
+#include "native/core/cci_image.h"
 #include "native/core/fold_image.h"
 
 #include <ctype.h>
@@ -69,11 +70,12 @@ static void covers_dir(char *out, size_t n)
     SDL_CreateDirectory(out);
 }
 
-static bool is_image_name(const char *name)
+/* a disc image's path (a split CCI's first part: its later parts aren't a game) */
+static bool is_image_name(const char *path)
 {
-    const char *dot = strrchr(name, '.');
+    const char *dot = strrchr(path, '.');
     return dot && (!SDL_strcasecmp(dot, ".iso") || !SDL_strcasecmp(dot, ".xiso") || !SDL_strcasecmp(dot, ".cci") ||
-                   !SDL_strcasecmp(dot, ".chd"));
+                   !SDL_strcasecmp(dot, ".chd")) && !nc_cci_later_part(path);
 }
 
 /* An extracted game's folder: a default.xbe in it (#214) */
@@ -586,8 +588,29 @@ static bool scan_stopped(void)
     return SDL_GetAtomicInt(&L.stop) || SDL_GetAtomicInt(&L.restart);
 }
 
-static void add_game(const char *path, const SDL_PathInfo *pi)
+/* A split CCI's first part: its size and time all its parts' (the bytes
+ * the game takes; a later part replaced, the game read again) */
+static void parts_info(const char *path, SDL_PathInfo *pi)
 {
+    char p[1200];
+    if (!nc_cci_part_path(path, 2, p, sizeof(p)) || !nc_cci_later_part(p)) {
+        return;
+    }
+    for (unsigned k = 2; nc_cci_part_path(path, k, p, sizeof(p)); k++) {
+        SDL_PathInfo ki;
+        if (!SDL_GetPathInfo(p, &ki)) {
+            break;
+        }
+        pi->size += ki.size;
+        pi->modify_time = ki.modify_time > pi->modify_time ? ki.modify_time : pi->modify_time;
+    }
+}
+
+static void add_game(const char *path, const SDL_PathInfo *file)
+{
+    SDL_PathInfo all = *file;
+    parts_info(path, &all);
+    const SDL_PathInfo *pi = &all;
     SDL_LockMutex(L.mu);
     LibGame *e = by_path(path);
     if (e && e->g.size == (int64_t)pi->size && e->mtime == (int64_t)pi->modify_time) {
@@ -710,7 +733,7 @@ static void scan_dir(const char *dir, int depth)
             add_game(p, &pi);       /* an extracted game: the folder is the disc */
         } else if (pi.type == SDL_PATHTYPE_DIRECTORY) {
             scan_dir(p, depth + 1);
-        } else if (pi.type == SDL_PATHTYPE_FILE && is_image_name(names[i]) && pi.size > 1 << 20 &&
+        } else if (pi.type == SDL_PATHTYPE_FILE && is_image_name(p) && pi.size > 1 << 20 &&
                    strlen(p) < sizeof(((XdGame *)0)->path) - 1) {
             add_game(p, &pi);
         }

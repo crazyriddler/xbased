@@ -1508,7 +1508,7 @@ static void SDLCALL dialog_cb(void *ud, const char *const *list, int filter)
 static const char *pick_disc(void)
 {
     static const SDL_DialogFileFilter filters[] = {
-        {"Xbox disc images (*.iso, *.xiso)", "iso;xiso"},
+        {"Xbox disc images (*.iso, *.xiso, *.cci, *.chd)", "iso;xiso;cci;chd"},
         {"All files", "*"},
     };
     SDL_ShowOpenFileDialog(dialog_cb, NULL, NULL, filters, 2, NULL, false);
@@ -1688,7 +1688,7 @@ static const char k_usage[] =
     "\n"
     "Usage: xbased [options] [disc image]\n"
     "\n"
-    "  -i, --input FILE     the disc image to play (.iso, .xiso, .chd), or nbd://host:port/export\n"
+    "  -i, --input FILE     the disc image to play (.iso, .xiso, .chd, .cci), or nbd://host:port/export\n"
     "  -c, --config FILE    the settings file to use instead of xbased.ini\n"
     "  -h, --help           this help\n"
     "\n"

@@ -4,6 +4,7 @@
  */
 #include "native/app/ui/xbox_data.h"
 #include "native/core/chd_image.h"
+#include "native/core/cci_image.h"
 #include "native/core/nbd_image.h"
 #include "native/core/fold_image.h"
 
@@ -75,11 +76,14 @@ void xd_clean_name(const char *path, char *out, size_t n)
     }
     char tmp[512];
     snprintf(tmp, sizeof(tmp), "%s", b);
-    /* the extensions: .iso, .xiso.iso, .xiso, .cso, .cci */
+    /* the extensions: .iso, .xiso.iso, .xiso, .cso, .cci, a split image's
+     * first part's .1.cci */
+    bool cci = false;
     for (int pass = 0; pass < 2; pass++) {
         char *dot = strrchr(tmp, '.');
         if (dot && (!SDL_strcasecmp(dot, ".iso") || !SDL_strcasecmp(dot, ".xiso") || !SDL_strcasecmp(dot, ".cso") ||
-                    !SDL_strcasecmp(dot, ".cci"))) {
+                    !SDL_strcasecmp(dot, ".cci") || (cci && !strcmp(dot, ".1")))) {
+            cci = !SDL_strcasecmp(dot, ".cci");
             *dot = 0;
         }
     }
@@ -105,14 +109,15 @@ void xd_clean_name(const char *path, char *out, size_t n)
 typedef struct {
     FILE *f;
     int64_t base;   /* the game partition */
-    int chd;        /* a CHD image: its descriptor (else -1) */
+    int chd;        /* a CHD, CCI or NBD server's image: its descriptor (else -1) */
 } Disc;
 
 static bool rd_at(Disc *d, int64_t off, void *buf, size_t n)
 {
     if (d->chd >= 0) {
-        return nc_nbd_is(d->chd) ? nc_nbd_read(d->chd, buf, n, (uint64_t)(d->base + off))
-                                 : nc_chd_read(d->chd, buf, n, (uint64_t)(d->base + off));
+        return nc_nbd_is(d->chd)   ? nc_nbd_read(d->chd, buf, n, (uint64_t)(d->base + off))
+               : nc_cci_is(d->chd) ? nc_cci_read(d->chd, buf, n, (uint64_t)(d->base + off))
+                                   : nc_chd_read(d->chd, buf, n, (uint64_t)(d->base + off));
     }
 #ifdef _WIN32
     if (_fseeki64(d->f, d->base + off, SEEK_SET) != 0) {
@@ -272,15 +277,18 @@ bool xd_read_game(const char *path, XdGame *g)
         xd_clean_name(dir, g->title, sizeof(g->title));
     }
     Disc d = {NULL, 0, folder ? -1 : open(path, O_RDONLY | O_BINARY)};
-    if (d.chd >= 0 && !nc_chd_attach(d.chd) && !nc_nbd_attach(d.chd)) {
-        close(d.chd);       /* not a CHD or an NBD server's image: the file as it is */
+    if (d.chd >= 0 && !nc_chd_attach(d.chd) && !nc_cci_attach(d.chd) && !nc_nbd_attach(d.chd)) {
+        close(d.chd);       /* not a CHD, a CCI or an NBD server's image: the file as it is */
         d.chd = -1;
     }
     if (d.chd < 0 && !(d.f = fopen(folder ? xbe : path, "rb"))) {
         return false;
     }
     if (d.chd >= 0) {
-        g->size = nc_nbd_is(d.chd) ? (int64_t)nc_nbd_size(d.chd) : (int64_t)lseek(d.chd, 0, SEEK_END);
+        /* a split CCI's: all its parts' */
+        g->size = nc_nbd_is(d.chd)   ? (int64_t)nc_nbd_size(d.chd)
+                  : nc_cci_is(d.chd) ? (int64_t)nc_cci_file_size(d.chd)
+                                     : (int64_t)lseek(d.chd, 0, SEEK_END);
     } else {
 #ifdef _WIN32
         _fseeki64(d.f, 0, SEEK_END);
@@ -361,6 +369,7 @@ bool xd_read_game(const char *path, XdGame *g)
     free(x);
     if (d.chd >= 0) {
         nc_chd_detach(d.chd);
+        nc_cci_detach(d.chd);
         nc_nbd_detach(d.chd);
         close(d.chd);
     } else {

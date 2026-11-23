@@ -98,7 +98,8 @@ xbased doesn't include any copyrighted Xbox software.
 - **A page per game**: play, load a state, settings, patches, controls; rename
   it, pick your own cover image, hide it, or make a **desktop shortcut** that
   starts it straight away (handy for Steam and other front ends).
-- **Disc images**: ISO, XISO and **CHD** (`chdman createdvd` or `createcd`).
+- **Disc images**: ISO, XISO, **CHD** (`chdman createdvd` or `createcd`) and
+  **CCI** (Repackinator's, split ones too: open the `.1.cci`).
 - **Extracted games**: a folder with the game's `default.xbe` and its files
   plays as the disc, and shows in the library like an image.
 - **Memory manager**: your games' saves with their icons; export, import and
@@ -233,7 +234,7 @@ xbased doesn't include any copyrighted Xbox software.
 3. Choose a game in **Games**. Box art downloads automatically (it can be
    turned off).
 
-Command line: `xbased <image.iso, .chd or a game's folder> [options]` starts a game directly; options
+Command line: `xbased <image.iso, .chd, .cci or a game's folder> [options]` starts a game directly; options
 are the same as the settings files' lines (`scale=2`, `uncap`, `crt=2`,
 `fullscreen=0`, `mod=<patch>`...). Settings are kept in `xbased.ini` (global)
 and `games/<TITLE ID>.<version>.ini` (per game) beside the executable on

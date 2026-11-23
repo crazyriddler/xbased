@@ -1963,10 +1963,13 @@ static void file_label(const LibGame *g, char *info, size_t n)
     snprintf(info, n, "%s", b);
     char *dot = strrchr(info, '.');
     if (dot && dot != info) {
+        const bool cci = !SDL_strcasecmp(dot, ".cci");
         *dot = 0;
         char *x = strrchr(info, '.');
         if (x && x != info && !SDL_strcasecmp(x, ".xiso")) {
             *x = 0;         /* name.xiso.iso */
+        } else if (x && x != info && cci && !strcmp(x, ".1")) {
+            *x = 0;         /* name.1.cci, a split image's first part */
         }
     }
 }
