@@ -499,6 +499,18 @@ bool nc_hle_dirty_fault(const siginfo_t *info, void *ucontext)
             return true;
         }
         static unsigned s_logged;
+        /* Nothing tracks the page, so nothing is lost by opening it: the access runs again instead of ending the
+         * process (a host thread's write to a render target's memory ended Star Wars: Republic Commando's run so,
+         * the page protected in a view and untracked). A failed mprotect falls through to the old report. */
+        void *page = (void *)((uintptr_t)info->si_addr & ~(uintptr_t)(NC_PAGE - 1));
+        if (mprotect(page, NC_PAGE, PROT_READ | PROT_WRITE) == 0) {
+            t_open_again = 0;
+            if (s_logged++ < 8) {
+                nc_log("hakuX-native-watch", "write fault at guest %08x (pa %08x), a page tracking doesn't hold "
+                       "protected: opened for writing", (uint32_t)guest, pa);
+            }
+            return true;
+        }
         if (s_logged++ < 8) {
             nc_log("xbased-native-watch", "write fault at guest %08x (pa %08x), a page tracking "
                    "doesn't hold protected", (uint32_t)guest, pa);
